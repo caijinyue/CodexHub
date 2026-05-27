@@ -2,6 +2,8 @@ use crate::config;
 use crate::size;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
+use serde::Deserialize;
+use serde_json::json;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,13 +21,13 @@ pub struct ProfileInfo {
 }
 
 pub fn profile_path(name: &str) -> Result<PathBuf> {
-    config::ensure_profile_name(&name)?;
+    config::ensure_profile_name(name)?;
     Ok(config::paths()?.profiles.join(name))
 }
 
 pub fn create(name: &str, copy_config: bool) -> Result<PathBuf> {
     let paths = config::init()?;
-    config::ensure_profile_name(&name)?;
+    config::ensure_profile_name(name)?;
     let path = paths.profiles.join(name);
     if path.exists() {
         anyhow::bail!("Profile already exists: {name}");
@@ -66,6 +68,60 @@ pub fn import_default(name: Option<&str>) -> Result<(String, PathBuf)> {
     }
     fs::create_dir_all(target.join("sessions"))
         .with_context(|| format!("Creating {}", target.join("sessions").display()))?;
+    Ok((name, target))
+}
+
+pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<(String, PathBuf)> {
+    let source = source.as_ref();
+    let data =
+        fs::read_to_string(source).with_context(|| format!("Reading {}", source.display()))?;
+    let export: Sub2Export = serde_json::from_str(&data)
+        .with_context(|| format!("Parsing sub2 JSON {}", source.display()))?;
+    let account = export
+        .accounts
+        .into_iter()
+        .find(|account| account.platform.as_deref().unwrap_or("openai") == "openai")
+        .context("sub2 JSON does not contain an OpenAI account")?;
+    let name = match name {
+        Some(name) if !name.trim().is_empty() => name.trim().to_string(),
+        _ => account
+            .credentials
+            .email
+            .clone()
+            .or_else(|| account.extra.email.clone())
+            .or_else(|| email_like(&account.name))
+            .context("sub2 account does not contain an email address; pass a profile name")?,
+    };
+    config::ensure_profile_name(name.as_str())?;
+
+    let paths = config::init()?;
+    let target = paths.profiles.join(&name);
+    if target.exists() {
+        anyhow::bail!("Profile already exists: {name}");
+    }
+    fs::create_dir_all(target.join("sessions"))
+        .with_context(|| format!("Creating {}", target.display()))?;
+    if let Some(src) = config::default_codex_config() {
+        if src.exists() {
+            fs::copy(&src, target.join("config.toml"))
+                .with_context(|| format!("Copying {}", src.display()))?;
+        }
+    }
+
+    let auth = json!({
+        "OPENAI_API_KEY": Value::Null,
+        "tokens": {
+            "id_token": account.credentials.id_token,
+            "access_token": account.credentials.access_token,
+            "refresh_token": account.credentials.refresh_token,
+            "account_id": account.credentials.account_id,
+        },
+        "last_refresh": account.extra.last_refresh.or(export.exported_at),
+    });
+    fs::write(target.join("auth.json"), serde_json::to_vec_pretty(&auth)?)
+        .with_context(|| format!("Writing {}", target.join("auth.json").display()))?;
+    secure_file(target.join("auth.json"))?;
+    secure_file(target.join("config.toml")).ok();
     Ok((name, target))
 }
 
@@ -117,6 +173,53 @@ fn copy_entry(source: &Path, target: &Path) -> Result<()> {
             .with_context(|| format!("Setting permissions on {}", target.display()))?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn secure_file(path: impl AsRef<Path>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = path.as_ref();
+    if path.exists() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Setting permissions on {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn secure_file(_path: impl AsRef<Path>) -> Result<()> {
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct Sub2Export {
+    exported_at: Option<String>,
+    accounts: Vec<Sub2Account>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Sub2Account {
+    name: String,
+    platform: Option<String>,
+    credentials: Sub2Credentials,
+    #[serde(default)]
+    extra: Sub2Extra,
+}
+
+#[derive(Debug, Deserialize)]
+struct Sub2Credentials {
+    access_token: String,
+    refresh_token: String,
+    id_token: String,
+    account_id: String,
+    email: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Sub2Extra {
+    email: Option<String>,
+    last_refresh: Option<String>,
 }
 
 #[cfg(unix)]
@@ -259,5 +362,101 @@ fn email_like(text: &str) -> Option<String> {
         Some(trimmed.to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn imports_sub2_json_as_isolated_codex_profile() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-sub2-test-{stamp}"));
+        let source = root.join("sub2.json");
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "exported_at": "2026-05-27T17:34:20+08:00",
+              "proxies": [],
+              "accounts": [
+                {
+                  "name": "Example",
+                  "platform": "openai",
+                  "type": "oauth",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "refresh_token": "refresh-value",
+                    "id_token": "id-value",
+                    "account_id": "account-value",
+                    "email": "person@example.com"
+                  },
+                  "extra": {
+                    "last_refresh": "2026-05-27T17:34:20+08:00"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (name, path) = import_sub2_json(&source, None).unwrap();
+
+        assert_eq!(name, "person@example.com");
+        assert_eq!(path, root.join("profiles").join("person@example.com"));
+        assert!(path.join("sessions").is_dir());
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert!(auth["OPENAI_API_KEY"].is_null());
+        assert_eq!(auth["tokens"]["access_token"], "access-value");
+        assert_eq!(auth["tokens"]["refresh_token"], "refresh-value");
+        assert_eq!(auth["tokens"]["id_token"], "id-value");
+        assert_eq!(auth["tokens"]["account_id"], "account-value");
+        assert_eq!(auth["last_refresh"], "2026-05-27T17:34:20+08:00");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn imports_sub2_json_with_explicit_name_without_email() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-sub2-named-test-{stamp}"));
+        let source = root.join("sub2.json");
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "accounts": [
+                {
+                  "name": "No Email",
+                  "platform": "openai",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "refresh_token": "refresh-value",
+                    "id_token": "id-value",
+                    "account_id": "account-value"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (name, path) = import_sub2_json(&source, Some("named-profile")).unwrap();
+
+        assert_eq!(name, "named-profile");
+        assert!(path.join("auth.json").is_file());
+
+        fs::remove_dir_all(&root).ok();
     }
 }

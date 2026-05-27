@@ -25,6 +25,10 @@ enum Commands {
     ImportDefault {
         name: Option<String>,
     },
+    ImportSub2 {
+        json: std::path::PathBuf,
+        name: Option<String>,
+    },
     Login {
         name: String,
     },
@@ -79,6 +83,10 @@ pub fn run() -> Result<()> {
         Commands::ImportDefault { name } => {
             let (name, path) = profile::import_default(name.as_deref())?;
             println!("Imported ~/.codex as profile {name}: {}", path.display());
+        }
+        Commands::ImportSub2 { json, name } => {
+            let (name, path) = profile::import_sub2_json(&json, name.as_deref())?;
+            println!("Imported sub2 JSON as profile {name}: {}", path.display());
         }
         Commands::Login { name } => std::process::exit(process::codex_login(&name)?),
         Commands::Run { name, args } => std::process::exit(process::codex_run(&name, &args)?),

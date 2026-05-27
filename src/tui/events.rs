@@ -52,6 +52,7 @@ fn handle_list(
         KeyCode::Enter => app.screen = Screen::Detail,
         KeyCode::Char('n') => start_input(app, InputMode::NewProfile),
         KeyCode::Char('i') => start_input(app, InputMode::ImportDefault),
+        KeyCode::Char('2') => start_input(app, InputMode::ImportSub2),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
@@ -119,6 +120,7 @@ fn handle_input(
                 app.input_mode,
                 InputMode::NewProfile
                     | InputMode::ImportDefault
+                    | InputMode::ImportSub2
                     | InputMode::DeleteConfirm
                     | InputMode::ExecPrompt
             ) {
@@ -147,6 +149,12 @@ fn submit_input(
                 crate::profile::import_default((!explicit.is_empty()).then_some(explicit))?;
             app.refresh_profiles()?;
             app.set_message(format!("Imported ~/.codex as profile {name}"));
+        }
+        InputMode::ImportSub2 => {
+            let json = app.input.trim();
+            let (name, _) = crate::profile::import_sub2_json(json, None)?;
+            app.refresh_profiles()?;
+            app.set_message(format!("Imported sub2 JSON as profile {name}"));
         }
         InputMode::DeleteConfirm => {
             let Some(name) = app.current_name() else {
@@ -197,7 +205,10 @@ fn submit_input(
 fn start_input(app: &mut App, mode: InputMode) {
     app.input.clear();
     if app.current_name().is_none()
-        && !matches!(mode, InputMode::NewProfile | InputMode::ImportDefault)
+        && !matches!(
+            mode,
+            InputMode::NewProfile | InputMode::ImportDefault | InputMode::ImportSub2
+        )
     {
         app.set_message("No profile selected");
     } else {

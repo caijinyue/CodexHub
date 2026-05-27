@@ -40,7 +40,7 @@ codexhub create personal
 codexhub login personal
 ```
 
-Each profile has its own `auth.json`, refresh token, session history, state databases, logs, and config. Login and token refresh are always handled by the official `codex` CLI.
+Each profile has its own `auth.json`, refresh token, session history, state databases, logs, and config. Login and token refresh are normally handled by the official `codex` CLI. CodexHub can also import a single account from an explicit sub2 JSON export into a new isolated profile.
 
 ## Concurrent Runs
 
@@ -125,7 +125,7 @@ logs_*.sqlite
 
 `auth.json` contains local login credentials and refresh tokens. Refresh tokens can rotate. Copying one `auth.json` into multiple profiles can leave one profile with a stale token after another profile refreshes it.
 
-CodexHub therefore never copies, reads, prints, shares, or overwrites `auth.json`. Use:
+CodexHub therefore never shares or overwrites `auth.json` between profiles. Use:
 
 ```bash
 codexhub login work
@@ -133,6 +133,8 @@ codexhub login personal
 ```
 
 This runs the official `codex login` with the correct `CODEX_HOME`.
+
+For one-time migration from a sub2 JSON export, use `codexhub import-sub2 <json> [name]`. This creates a new profile directory and writes a fresh Codex-style `auth.json` for that profile only.
 
 ## Why Not Share Sessions or History
 
@@ -159,6 +161,7 @@ The boundary is the directory, not a credential file.
 codexhub init
 codexhub create <name> [--copy-config]
 codexhub import-default [name]
+codexhub import-sub2 <json> [name]
 codexhub login <name>
 codexhub run <name> -- [codex args...]
 codexhub exec <name> -- [codex exec args...]
@@ -203,3 +206,19 @@ codexhub import-default personal
 ```
 
 The import copies the whole `~/.codex` home into `~/.codexhub/profiles/<name>/`, skipping runtime `tmp/` files. Do not import the same default account into multiple profiles.
+
+## Import sub2 JSON
+
+To import one OpenAI account from a sub2 JSON export:
+
+```bash
+codexhub import-sub2 accounts.json
+```
+
+CodexHub derives the profile name from the account email address. You can pass an explicit name:
+
+```bash
+codexhub import-sub2 accounts.json work
+```
+
+The import creates `~/.codexhub/profiles/<name>/`, writes a Codex-compatible `auth.json`, creates `sessions/`, and copies `~/.codex/config.toml` when it exists. In the TUI, press `2` from the profile list and enter the JSON path.

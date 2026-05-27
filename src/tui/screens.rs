@@ -10,6 +10,7 @@ pub enum InputMode {
     None,
     NewProfile,
     ImportDefault,
+    ImportSub2,
     DeleteConfirm,
     ExecPrompt,
     ShareConfirm,

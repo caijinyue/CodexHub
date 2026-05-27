@@ -110,6 +110,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
                     ("Enter", "detail"),
                     ("n", "new"),
                     ("i", "import"),
+                    ("2", "sub2"),
                     ("d", "delete"),
                 ],
             ),
@@ -250,6 +251,13 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
             "Import ~/.codex",
             format!(
                 "Profile name: {}\nLeave empty to use the email address from ~/.codex/auth.json.",
+                app.input
+            ),
+        ),
+        InputMode::ImportSub2 => (
+            "Import sub2 JSON",
+            format!(
+                "JSON path: {}\nCreates a profile named from the account email.",
                 app.input
             ),
         ),
