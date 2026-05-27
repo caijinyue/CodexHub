@@ -22,6 +22,9 @@ enum Commands {
         #[arg(long)]
         copy_config: bool,
     },
+    ImportDefault {
+        name: Option<String>,
+    },
     Login {
         name: String,
     },
@@ -72,6 +75,10 @@ pub fn run() -> Result<()> {
         Commands::Create { name, copy_config } => {
             let path = profile::create(&name, copy_config)?;
             println!("Created profile {name}: {}", path.display());
+        }
+        Commands::ImportDefault { name } => {
+            let (name, path) = profile::import_default(name.as_deref())?;
+            println!("Imported ~/.codex as profile {name}: {}", path.display());
         }
         Commands::Login { name } => std::process::exit(process::codex_login(&name)?),
         Commands::Run { name, args } => std::process::exit(process::codex_run(&name, &args)?),

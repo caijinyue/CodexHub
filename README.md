@@ -158,6 +158,7 @@ The boundary is the directory, not a credential file.
 ```bash
 codexhub init
 codexhub create <name> [--copy-config]
+codexhub import-default [name]
 codexhub login <name>
 codexhub run <name> -- [codex args...]
 codexhub exec <name> -- [codex exec args...]
@@ -186,3 +187,19 @@ CodexHub is split into narrow modules:
 - `tui`: ratatui/crossterm interface, input popups, doctor view, and external command handoff.
 
 The most important invariant is simple: CodexHub never becomes an auth manager. It manages isolated `CODEX_HOME` directories and delegates login, token refresh, and Codex behavior to the official CLI.
+
+## Import Existing `~/.codex`
+
+To import your current default Codex home without logging in again:
+
+```bash
+codexhub import-default
+```
+
+When no name is provided, CodexHub derives the profile name from the email address in `~/.codex/auth.json`. You can also pass a name explicitly:
+
+```bash
+codexhub import-default personal
+```
+
+The import copies the whole `~/.codex` home into `~/.codexhub/profiles/<name>/`, skipping runtime `tmp/` files. Do not import the same default account into multiple profiles.

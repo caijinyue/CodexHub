@@ -9,6 +9,7 @@ pub enum Screen {
 pub enum InputMode {
     None,
     NewProfile,
+    ImportDefault,
     DeleteConfirm,
     ExecPrompt,
     ShareConfirm,

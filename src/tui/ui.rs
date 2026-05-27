@@ -73,7 +73,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
     )
     .block(widgets::block("CodexHub Profiles"));
     frame.render_widget(table, chunks[0]);
-    frame.render_widget(help("j/k/↑/↓ move  Enter detail  n new  d delete  l login  r run  e exec  s share  u unshare  D doctor  q quit"), chunks[1]);
+    frame.render_widget(help("j/k/↑/↓ move  Enter detail  n new  i import ~/.codex  d delete  l login  r run  e exec  s share  u unshare  D doctor  q quit"), chunks[1]);
 }
 
 fn draw_detail(frame: &mut Frame<'_>, app: &App) {
@@ -192,6 +192,13 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(Clear, area);
     let (title, body) = match app.input_mode {
         InputMode::NewProfile => ("New Profile", format!("Name: {}", app.input)),
+        InputMode::ImportDefault => (
+            "Import ~/.codex",
+            format!(
+                "Profile name: {}\nLeave empty to use the email address from ~/.codex/auth.json.",
+                app.input
+            ),
+        ),
         InputMode::DeleteConfirm => {
             let expected = app.current_name().unwrap_or_default();
             (

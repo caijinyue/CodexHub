@@ -51,6 +51,7 @@ fn handle_list(
         KeyCode::Up | KeyCode::Char('k') => app.move_up(),
         KeyCode::Enter => app.screen = Screen::Detail,
         KeyCode::Char('n') => start_input(app, InputMode::NewProfile),
+        KeyCode::Char('i') => start_input(app, InputMode::ImportDefault),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
@@ -116,7 +117,10 @@ fn handle_input(
         KeyCode::Char(ch) => {
             if matches!(
                 app.input_mode,
-                InputMode::NewProfile | InputMode::DeleteConfirm | InputMode::ExecPrompt
+                InputMode::NewProfile
+                    | InputMode::ImportDefault
+                    | InputMode::DeleteConfirm
+                    | InputMode::ExecPrompt
             ) {
                 app.input.push(ch);
             }
@@ -136,6 +140,13 @@ fn submit_input(
             crate::profile::create(&name, false)?;
             app.refresh_profiles()?;
             app.set_message(format!("Created profile {name}"));
+        }
+        InputMode::ImportDefault => {
+            let explicit = app.input.trim();
+            let (name, _) =
+                crate::profile::import_default((!explicit.is_empty()).then_some(explicit))?;
+            app.refresh_profiles()?;
+            app.set_message(format!("Imported ~/.codex as profile {name}"));
         }
         InputMode::DeleteConfirm => {
             let Some(name) = app.current_name() else {
@@ -185,7 +196,9 @@ fn submit_input(
 
 fn start_input(app: &mut App, mode: InputMode) {
     app.input.clear();
-    if app.current_name().is_none() && !matches!(mode, InputMode::NewProfile) {
+    if app.current_name().is_none()
+        && !matches!(mode, InputMode::NewProfile | InputMode::ImportDefault)
+    {
         app.set_message("No profile selected");
     } else {
         app.input_mode = mode;
