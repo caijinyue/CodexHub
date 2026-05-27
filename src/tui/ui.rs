@@ -7,9 +7,9 @@ use crate::size;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::Frame,
-    style::{Color, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap},
+    widgets::{Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap},
 };
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -27,7 +27,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(area);
 
     let rows = app.profiles.iter().enumerate().map(|(idx, p)| {
@@ -40,15 +40,43 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         } else {
             Style::default()
         };
+        let login = if p.logged_in {
+            Span::styled(
+                "yes",
+                Style::default()
+                    .fg(widgets::OK)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled("no", Style::default().fg(widgets::WARN))
+        };
+        let shared = if p.shared_cache {
+            Span::styled(
+                "yes",
+                Style::default()
+                    .fg(widgets::CACHE)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled("no", Style::default().fg(widgets::MUTED))
+        };
         Row::new(vec![
-            Cell::from(p.name.clone()),
-            Cell::from(if p.logged_in { "yes" } else { "no" }),
-            Cell::from(auth),
+            Cell::from(Span::styled(
+                p.name.clone(),
+                Style::default()
+                    .fg(widgets::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(login),
+            Cell::from(Span::styled(auth, Style::default().fg(widgets::MUTED))),
             Cell::from(size::human(p.sessions_size)),
             Cell::from(size::human(p.logs_size)),
             Cell::from(size::human(p.total_size)),
-            Cell::from(if p.shared_cache { "yes" } else { "no" }),
-            Cell::from(p.path.display().to_string()),
+            Cell::from(shared),
+            Cell::from(Span::styled(
+                p.path.display().to_string(),
+                Style::default().fg(widgets::MUTED),
+            )),
         ])
         .style(style)
     });
@@ -73,7 +101,24 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
     )
     .block(widgets::block("CodexHub Profiles"));
     frame.render_widget(table, chunks[0]);
-    frame.render_widget(help("j/k/↑/↓ move  Enter detail  n new  i import ~/.codex  d delete  l login  r run  e exec  s share  u unshare  D doctor  q quit"), chunks[1]);
+    frame.render_widget(
+        widgets::help_bar(&[
+            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+            (
+                "Profile",
+                &[
+                    ("Enter", "detail"),
+                    ("n", "new"),
+                    ("i", "import"),
+                    ("d", "delete"),
+                ],
+            ),
+            ("Codex", &[("l", "login"), ("r", "run"), ("e", "exec")]),
+            ("Cache", &[("s", "share"), ("u", "unshare")]),
+            ("System", &[("D", "doctor"), ("q", "quit")]),
+        ]),
+        chunks[1],
+    );
 }
 
 fn draw_detail(frame: &mut Frame<'_>, app: &App) {
@@ -143,7 +188,7 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(area);
     frame.render_widget(
         Paragraph::new(lines.join("\n"))
@@ -152,7 +197,12 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
         chunks[0],
     );
     frame.render_widget(
-        help("b back  l login  r run  e exec  s share  u unshare  D doctor  q quit"),
+        widgets::help_bar(&[
+            ("Move", &[("b", "back")]),
+            ("Codex", &[("l", "login"), ("r", "run"), ("e", "exec")]),
+            ("Cache", &[("s", "share"), ("u", "unshare")]),
+            ("System", &[("D", "doctor"), ("q", "quit")]),
+        ]),
         chunks[1],
     );
 }
@@ -161,30 +211,34 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let items = app.doctor_checks.iter().map(|c| {
         let color = match c.level {
-            crate::doctor::Level::Ok => Color::Green,
-            crate::doctor::Level::Warn => Color::Yellow,
-            crate::doctor::Level::Error => Color::Red,
+            crate::doctor::Level::Ok => widgets::OK,
+            crate::doctor::Level::Warn => widgets::WARN,
+            crate::doctor::Level::Error => widgets::ERROR,
         };
         ListItem::new(Line::from(vec![
             Span::styled(
                 format!("{:<5}", c.level.as_str()),
-                Style::default().fg(color),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(" {}: {}", c.subject, c.message)),
+            Span::styled(
+                format!(" {}: ", c.subject),
+                Style::default().fg(widgets::TITLE),
+            ),
+            Span::styled(c.message.clone(), Style::default().fg(widgets::TEXT)),
         ]))
     });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(area);
     frame.render_widget(List::new(items).block(widgets::block("Doctor")), chunks[0]);
-    frame.render_widget(help("b back  r rerun  q quit"), chunks[1]);
-}
-
-fn help(text: &str) -> Paragraph<'_> {
-    Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL))
-        .alignment(Alignment::Center)
+    frame.render_widget(
+        widgets::help_bar(&[
+            ("Move", &[("b", "back")]),
+            ("System", &[("r", "rerun"), ("q", "quit")]),
+        ]),
+        chunks[1],
+    );
 }
 
 fn draw_popup(frame: &mut Frame<'_>, app: &App) {
@@ -221,6 +275,8 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         Paragraph::new(body)
             .block(widgets::block(title))
+            .style(Style::default().fg(widgets::TEXT).bg(widgets::BG))
+            .alignment(Alignment::Left)
             .wrap(Wrap { trim: false }),
         area,
     );
