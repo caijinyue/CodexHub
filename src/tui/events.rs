@@ -37,6 +37,7 @@ fn handle_key(
         Screen::List => handle_list(terminal, app, key),
         Screen::Detail => handle_detail(terminal, app, key),
         Screen::Doctor => handle_doctor(app, key),
+        Screen::History => handle_history(terminal, app, key),
     }
 }
 
@@ -57,6 +58,10 @@ fn handle_list(
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
         KeyCode::Char('e') => start_input(app, InputMode::ExecPrompt),
+        KeyCode::Char('h') => {
+            app.refresh_history_sessions()?;
+            app.screen = Screen::History;
+        }
         KeyCode::Char('s') => app.input_mode = InputMode::ShareConfirm,
         KeyCode::Char('u') => app.input_mode = InputMode::UnshareConfirm,
         KeyCode::Char('D') => {
@@ -95,6 +100,23 @@ fn handle_doctor(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('b') => app.screen = Screen::List,
         KeyCode::Char('r') => app.doctor_checks = crate::doctor::run(false)?,
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_history(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
+        KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
+        KeyCode::Char('r') => app.refresh_history_sessions()?,
+        KeyCode::Enter => external_resume(terminal, app)?,
         _ => {}
     }
     Ok(false)
@@ -255,6 +277,23 @@ fn external_with_prompt(
     wait_for_enter(status)?;
     super::resume_terminal(terminal)?;
     app.refresh_profiles()?;
+    Ok(())
+}
+
+fn external_resume(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    let Some(session) = app.current_history_session() else {
+        app.set_message("No history session selected");
+        return Ok(());
+    };
+    super::suspend_terminal(terminal)?;
+    let status = crate::process::codex_resume(&session.profile, &session.session_id)?;
+    wait_for_enter(status)?;
+    super::resume_terminal(terminal)?;
+    app.refresh_profiles()?;
+    app.refresh_history_sessions()?;
     Ok(())
 }
 

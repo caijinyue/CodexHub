@@ -13,6 +13,15 @@ pub struct AccountStatus {
     pub secondary_remaining_percent: Option<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySession {
+    pub profile: String,
+    pub session_id: String,
+    pub title: String,
+    pub cwd: Option<String>,
+    pub updated_at: i64,
+}
+
 pub fn codex_login(name: &str) -> Result<i32> {
     run_codex(name, ["login"])
 }
@@ -25,6 +34,10 @@ pub fn codex_exec(name: &str, args: &[String]) -> Result<i32> {
     let mut all = vec!["exec".to_string()];
     all.extend(args.iter().cloned());
     run_codex(name, all.iter().map(String::as_str))
+}
+
+pub fn codex_resume(name: &str, session_id: &str) -> Result<i32> {
+    run_codex(name, ["resume", "--all", session_id])
 }
 
 pub fn run_codex<'a, I>(name: &str, args: I) -> Result<i32>
@@ -44,6 +57,22 @@ where
 }
 
 pub fn codex_account_status(name: &str) -> Result<AccountStatus> {
+    let text = app_server_request(name, 2, r#"{"id":2,"method":"account/rateLimits/read"}"#)?;
+    parse_account_status(&text).context("Parsing codex account status")
+}
+
+pub fn codex_history_sessions(name: &str, limit: usize) -> Result<Vec<HistorySession>> {
+    let text = app_server_request(
+        name,
+        3,
+        &format!(
+            r#"{{"id":3,"method":"thread/list","params":{{"limit":{limit},"sortKey":"updated_at","sortDirection":"desc","sourceKinds":[],"archived":false,"cwd":null,"useStateDbOnly":false}}}}"#
+        ),
+    )?;
+    parse_history_sessions(name, &text).context("Parsing codex resume session list")
+}
+
+fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<String> {
     let home = profile::ensure_exists(name)?;
     let mut child = Command::new("timeout")
         .args(["12", "codex", "app-server", "--listen", "stdio://"])
@@ -60,15 +89,14 @@ pub fn codex_account_status(name: &str) -> Result<AccountStatus> {
         r#"{{"id":1,"method":"initialize","params":{{"clientInfo":{{"name":"codexhub","title":"CodexHub","version":"0.1.0"}},"capabilities":{{"experimentalApi":true,"requestAttestation":false}}}}}}"#
     )?;
     thread::sleep(Duration::from_millis(500));
-    writeln!(stdin, r#"{{"id":2,"method":"account/rateLimits/read"}}"#)?;
-    thread::sleep(Duration::from_secs(4));
+    writeln!(stdin, "{request}")?;
+    thread::sleep(Duration::from_secs(if request_id == 2 { 4 } else { 3 }));
     drop(stdin);
 
     let out = child
         .wait_with_output()
         .with_context(|| "Reading codex app-server output")?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    parse_account_status(&text).context("Parsing codex account status")
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn parse_account_status(text: &str) -> Option<AccountStatus> {
@@ -97,6 +125,46 @@ fn remaining_percent(used_percent: u8) -> Option<u8> {
     Some(100u8.saturating_sub(used_percent.min(100)))
 }
 
+fn parse_history_sessions(profile: &str, text: &str) -> Option<Vec<HistorySession>> {
+    for line in text.lines() {
+        let value: ThreadListLine = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if value.id == Some(3) {
+            let mut sessions: Vec<_> = value
+                .result?
+                .data
+                .into_iter()
+                .map(|thread| HistorySession {
+                    profile: profile.to_string(),
+                    session_id: thread.session_id,
+                    title: thread
+                        .name
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| trim_preview(&thread.preview)),
+                    cwd: thread.cwd,
+                    updated_at: thread.updated_at,
+                })
+                .collect();
+            sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+            return Some(sessions);
+        }
+    }
+    None
+}
+
+fn trim_preview(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        "(untitled)".into()
+    } else if collapsed.chars().count() > 80 {
+        format!("{}...", collapsed.chars().take(77).collect::<String>())
+    } else {
+        collapsed
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AppServerLine {
     id: Option<u64>,
@@ -123,6 +191,28 @@ struct RateLimitWindow {
     used_percent: u8,
 }
 
+#[derive(Debug, Deserialize)]
+struct ThreadListLine {
+    id: Option<u64>,
+    result: Option<ThreadListResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadListResponse {
+    data: Vec<ThreadSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadSummary {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    preview: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: i64,
+    cwd: Option<String>,
+    name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +228,20 @@ mod tests {
         assert_eq!(status.plan_type.as_deref(), Some("plus"));
         assert_eq!(status.primary_remaining_percent, Some(99));
         assert_eq!(status.secondary_remaining_percent, Some(81));
+    }
+
+    #[test]
+    fn parses_resume_thread_list() {
+        let output = r#"{"id":1,"result":{"codexHome":"/tmp"}}
+{"method":"remoteControl/status/changed","params":{"status":"disabled"}}
+{"id":3,"result":{"data":[{"id":"t1","sessionId":"s1","preview":"first user request with a long enough preview","updatedAt":200,"cwd":"/repo","name":null},{"id":"t2","sessionId":"s2","preview":"ignored","updatedAt":300,"cwd":"/repo2","name":"Named thread"}],"nextCursor":null,"backwardsCursor":null}}"#;
+
+        let sessions = parse_history_sessions("work", output).unwrap();
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].session_id, "s2");
+        assert_eq!(sessions[0].title, "Named thread");
+        assert_eq!(sessions[1].profile, "work");
+        assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
     }
 }

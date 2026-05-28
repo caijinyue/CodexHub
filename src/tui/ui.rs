@@ -17,6 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         Screen::List => draw_list(frame, app),
         Screen::Detail => draw_detail(frame, app),
         Screen::Doctor => draw_doctor(frame, app),
+        Screen::History => draw_history(frame, app),
     }
     if app.input_mode != InputMode::None {
         draw_popup(frame, app);
@@ -119,6 +120,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
                 ],
             ),
             ("Codex", &[("l", "login"), ("r", "run"), ("e", "exec")]),
+            ("History", &[("h", "resume")]),
             ("Cache", &[("s", "share"), ("u", "unshare")]),
             ("System", &[("D", "doctor"), ("q", "quit")]),
         ]),
@@ -228,6 +230,23 @@ fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
         .unwrap_or_else(|| "-".into())
 }
 
+fn history_time(timestamp: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(chrono::DateTime::<chrono::Local>::from)
+        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn short_home(path: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_string();
+    };
+    let home = home.to_string_lossy();
+    path.strip_prefix(home.as_ref())
+        .map(|rest| format!("~{rest}"))
+        .unwrap_or_else(|| path.to_string())
+}
+
 fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let items = app.doctor_checks.iter().map(|c| {
@@ -257,6 +276,71 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
         widgets::help_bar(&[
             ("Move", &[("b", "back")]),
             ("System", &[("r", "rerun"), ("q", "quit")]),
+        ]),
+        chunks[1],
+    );
+}
+
+fn draw_history(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
+        .split(area);
+    let rows = app
+        .history_sessions
+        .iter()
+        .enumerate()
+        .map(|(idx, session)| {
+            let style = if idx == app.selected_history {
+                widgets::selected_style()
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(Span::styled(
+                    session.profile.clone(),
+                    Style::default().fg(widgets::TEXT),
+                )),
+                Cell::from(history_time(session.updated_at)),
+                Cell::from(session.title.clone()),
+                Cell::from(
+                    session
+                        .cwd
+                        .as_deref()
+                        .map(short_home)
+                        .unwrap_or_else(|| "-".into()),
+                ),
+                Cell::from(Span::styled(
+                    session.session_id.clone(),
+                    Style::default().fg(widgets::MUTED),
+                )),
+            ])
+            .style(style)
+        });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(24),
+            Constraint::Length(16),
+            Constraint::Min(28),
+            Constraint::Length(28),
+            Constraint::Length(20),
+        ],
+    )
+    .header(
+        Row::new(["Profile", "Updated", "Title", "CWD", "Session"]).style(widgets::header_style()),
+    )
+    .block(widgets::block("Resume Sessions"));
+    frame.render_widget(table, chunks[0]);
+    frame.render_widget(
+        widgets::help_bar(&[
+            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+            (
+                "Session",
+                &[("Enter", "resume"), ("r", "refresh"), ("b", "back")],
+            ),
+            ("System", &[("q", "quit")]),
         ]),
         chunks[1],
     );

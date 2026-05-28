@@ -11,6 +11,8 @@ pub struct App {
     pub input: String,
     pub message: String,
     pub doctor_checks: Vec<doctor::Check>,
+    pub history_sessions: Vec<process::HistorySession>,
+    pub selected_history: usize,
 }
 
 impl App {
@@ -25,6 +27,8 @@ impl App {
             input: String::new(),
             message: String::new(),
             doctor_checks: Vec::new(),
+            history_sessions: Vec::new(),
+            selected_history: 0,
         })
     }
 
@@ -48,6 +52,29 @@ impl App {
 
     pub fn move_up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn move_history_down(&mut self) {
+        if !self.history_sessions.is_empty() {
+            self.selected_history =
+                (self.selected_history + 1).min(self.history_sessions.len() - 1);
+        }
+    }
+
+    pub fn move_history_up(&mut self) {
+        self.selected_history = self.selected_history.saturating_sub(1);
+    }
+
+    pub fn current_history_session(&self) -> Option<process::HistorySession> {
+        self.history_sessions.get(self.selected_history).cloned()
+    }
+
+    pub fn refresh_history_sessions(&mut self) -> Result<()> {
+        self.history_sessions = all_history_sessions(&self.profiles);
+        self.selected_history = self
+            .selected_history
+            .min(self.history_sessions.len().saturating_sub(1));
+        Ok(())
     }
 
     pub fn set_message(&mut self, msg: impl Into<String>) {
@@ -80,4 +107,22 @@ fn profiles_with_account_status() -> Result<Vec<profile::ProfileInfo>> {
     }
 
     Ok(profiles)
+}
+
+fn all_history_sessions(profiles: &[profile::ProfileInfo]) -> Vec<process::HistorySession> {
+    let handles: Vec<_> = profiles
+        .iter()
+        .filter(|profile| profile.logged_in)
+        .map(|profile| {
+            let name = profile.name.clone();
+            thread::spawn(move || process::codex_history_sessions(&name, 200).unwrap_or_default())
+        })
+        .collect();
+    let mut sessions: Vec<_> = handles
+        .into_iter()
+        .filter_map(|handle| handle.join().ok())
+        .flatten()
+        .collect();
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    sessions
 }
