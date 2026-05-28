@@ -150,6 +150,45 @@ pub fn delete(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn copy_session_to_profile(
+    source_profile: &str,
+    target_profile: &str,
+    session_id: &str,
+    source_session_path: &str,
+) -> Result<PathBuf> {
+    let source_root = ensure_exists(source_profile)?;
+    let target_root = ensure_exists(target_profile)?;
+    let source_session_path = PathBuf::from(source_session_path);
+    if !source_session_path.is_file() {
+        anyhow::bail!(
+            "Session file does not exist: {}",
+            source_session_path.display()
+        );
+    }
+    let relative = source_session_path
+        .strip_prefix(&source_root)
+        .with_context(|| {
+            format!(
+                "Session file {} is not under source profile {}",
+                source_session_path.display(),
+                source_root.display()
+            )
+        })?;
+    let target_session_path = target_root.join(relative);
+    if let Some(parent) = target_session_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+    }
+    fs::copy(&source_session_path, &target_session_path).with_context(|| {
+        format!(
+            "Copying {} to {}",
+            source_session_path.display(),
+            target_session_path.display()
+        )
+    })?;
+    copy_session_index_line(&source_root, &target_root, session_id)?;
+    Ok(target_session_path)
+}
+
 fn copy_codex_home(source: &Path, target: &Path) -> Result<()> {
     for entry in fs::read_dir(source).with_context(|| format!("Reading {}", source.display()))? {
         let entry = entry?;
@@ -188,6 +227,31 @@ fn copy_entry(source: &Path, target: &Path) -> Result<()> {
         fs::set_permissions(target, metadata.permissions())
             .with_context(|| format!("Setting permissions on {}", target.display()))?;
     }
+    Ok(())
+}
+
+fn copy_session_index_line(source_root: &Path, target_root: &Path, session_id: &str) -> Result<()> {
+    let source = source_root.join("session_index.jsonl");
+    if !source.exists() {
+        return Ok(());
+    }
+    let target = target_root.join("session_index.jsonl");
+    let existing = fs::read_to_string(&target).unwrap_or_default();
+    if existing.lines().any(|line| line.contains(session_id)) {
+        return Ok(());
+    }
+    let source_data =
+        fs::read_to_string(&source).with_context(|| format!("Reading {}", source.display()))?;
+    let Some(line) = source_data.lines().find(|line| line.contains(session_id)) else {
+        return Ok(());
+    };
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&target)
+        .with_context(|| format!("Opening {}", target.display()))?;
+    writeln!(file, "{line}").with_context(|| format!("Writing {}", target.display()))?;
     Ok(())
 }
 
@@ -587,6 +651,48 @@ mod tests {
         let expires = plan_expires_at(&value).unwrap();
 
         assert_eq!(expires.timestamp(), 1780716616);
+    }
+
+    #[test]
+    fn copies_session_file_and_index_to_target_profile() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-copy-session-test-{stamp}"));
+        std::env::set_var("CODEXHUB_HOME", &root);
+        let source = create("source", false).unwrap();
+        let target = create("target", false).unwrap();
+        let session = source
+            .join("sessions")
+            .join("2026")
+            .join("05")
+            .join("28")
+            .join("rollout-test-session.jsonl");
+        fs::create_dir_all(session.parent().unwrap()).unwrap();
+        fs::write(&session, "{}\n").unwrap();
+        fs::write(
+            source.join("session_index.jsonl"),
+            r#"{"id":"test-session","thread_name":"Test","updated_at":"2026-05-28T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let copied = copy_session_to_profile(
+            "source",
+            "target",
+            "test-session",
+            session.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(copied, target.join(session.strip_prefix(&source).unwrap()));
+        assert_eq!(fs::read_to_string(copied).unwrap(), "{}\n");
+        assert!(fs::read_to_string(target.join("session_index.jsonl"))
+            .unwrap()
+            .contains("test-session"));
+
+        fs::remove_dir_all(&root).ok();
     }
 
     fn profile_for_sort(name: &str, expiry: Option<i64>) -> ProfileInfo {

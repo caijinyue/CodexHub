@@ -13,6 +13,7 @@ pub fn run_loop(
     app: &mut App,
 ) -> Result<()> {
     loop {
+        app.poll_background();
         terminal.draw(|frame| super::ui::draw(frame, app))?;
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
@@ -116,6 +117,7 @@ fn handle_history(
         KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,
+        KeyCode::Char('c') => start_input(app, InputMode::ContinueProfile),
         KeyCode::Enter => external_resume(terminal, app)?,
         _ => {}
     }
@@ -144,6 +146,7 @@ fn handle_input(
                     | InputMode::ImportDefault
                     | InputMode::ImportSub2
                     | InputMode::DeleteConfirm
+                    | InputMode::ContinueProfile
                     | InputMode::ExecPrompt
             ) {
                 app.input.push(ch);
@@ -195,6 +198,11 @@ fn submit_input(
             app.input_mode = InputMode::None;
             app.input.clear();
         }
+        InputMode::ContinueProfile => {
+            external_continue_with_profile(terminal, app)?;
+            app.input_mode = InputMode::None;
+            app.input.clear();
+        }
         InputMode::ShareConfirm => {
             let Some(name) = app.current_name() else {
                 return Ok(());
@@ -229,7 +237,10 @@ fn start_input(app: &mut App, mode: InputMode) {
     if app.current_name().is_none()
         && !matches!(
             mode,
-            InputMode::NewProfile | InputMode::ImportDefault | InputMode::ImportSub2
+            InputMode::NewProfile
+                | InputMode::ImportDefault
+                | InputMode::ImportSub2
+                | InputMode::ContinueProfile
         )
     {
         app.set_message("No profile selected");
@@ -290,6 +301,29 @@ fn external_resume(
     };
     super::suspend_terminal(terminal)?;
     let status = crate::process::codex_resume(&session.profile, &session.session_id)?;
+    wait_for_enter(status)?;
+    super::resume_terminal(terminal)?;
+    app.refresh_profiles()?;
+    app.refresh_history_sessions()?;
+    Ok(())
+}
+
+fn external_continue_with_profile(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    let Some(session) = app.current_history_session() else {
+        app.set_message("No history session selected");
+        return Ok(());
+    };
+    let target = app.input.trim().to_string();
+    if target.is_empty() {
+        app.set_message("Target profile name is required");
+        return Ok(());
+    }
+    crate::profile::ensure_exists(&target)?;
+    super::suspend_terminal(terminal)?;
+    let status = crate::process::codex_resume_copied_session(&session, &target)?;
     wait_for_enter(status)?;
     super::resume_terminal(terminal)?;
     app.refresh_profiles()?;

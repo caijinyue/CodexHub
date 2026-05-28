@@ -81,6 +81,11 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         ])
         .style(style)
     });
+    let title = if app.status_loading {
+        "CodexHub Profiles (loading status...)"
+    } else {
+        "CodexHub Profiles"
+    };
     let table = Table::new(
         rows,
         [
@@ -104,7 +109,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         ])
         .style(widgets::header_style()),
     )
-    .block(widgets::block("CodexHub Profiles"));
+    .block(widgets::block(title));
     frame.render_widget(table, chunks[0]);
     frame.render_widget(
         widgets::help_bar(&[
@@ -287,10 +292,17 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(area);
+    let visible_rows = usize::from(chunks[0].height.saturating_sub(3)).max(1);
+    let start = app
+        .selected_history
+        .saturating_add(1)
+        .saturating_sub(visible_rows);
     let rows = app
         .history_sessions
         .iter()
         .enumerate()
+        .skip(start)
+        .take(visible_rows)
         .map(|(idx, session)| {
             let style = if idx == app.selected_history {
                 widgets::selected_style()
@@ -331,14 +343,23 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
     .header(
         Row::new(["Profile", "Updated", "Title", "CWD", "Session"]).style(widgets::header_style()),
     )
-    .block(widgets::block("Resume Sessions"));
+    .block(widgets::block(if app.history_loading {
+        "Resume Sessions (loading...)"
+    } else {
+        "Resume Sessions"
+    }));
     frame.render_widget(table, chunks[0]);
     frame.render_widget(
         widgets::help_bar(&[
             ("Move", &[("↑↓", "select"), ("j/k", "select")]),
             (
                 "Session",
-                &[("Enter", "resume"), ("r", "refresh"), ("b", "back")],
+                &[
+                    ("Enter", "resume"),
+                    ("c", "continue as"),
+                    ("r", "refresh"),
+                    ("b", "back"),
+                ],
             ),
             ("System", &[("q", "quit")]),
         ]),
@@ -372,6 +393,13 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 format!("Type \"{expected}\" to confirm:\n{}", app.input),
             )
         }
+        InputMode::ContinueProfile => (
+            "Continue With Profile",
+            format!(
+                "Target profile name: {}\nCopies the selected session into that profile, then runs codex resume.",
+                app.input
+            ),
+        ),
         InputMode::ExecPrompt => ("Codex Exec", format!("Prompt: {}", app.input)),
         InputMode::ShareConfirm => (
             "Share Cache",

@@ -86,9 +86,11 @@ codexhub
 
 [Doctor Screenshot]
 
-The profile list automatically reads each logged-in profile's Codex account status through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
+The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
 
-Press `h` from the profile list to show resume sessions across all profiles. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
+Press `h` from the profile list to show resume sessions across all profiles. The history screen also loads in the background and supports scrolling through the merged session list. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
+
+If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, and enter the target profile name. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
 
 ## Shared Cache
 

@@ -1,6 +1,7 @@
 use super::screens::{InputMode, Screen};
 use crate::{doctor, process, profile};
 use anyhow::Result;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 pub struct App {
@@ -13,13 +14,17 @@ pub struct App {
     pub doctor_checks: Vec<doctor::Check>,
     pub history_sessions: Vec<process::HistorySession>,
     pub selected_history: usize,
+    pub status_loading: bool,
+    pub history_loading: bool,
+    status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
+    history_rx: Option<Receiver<Vec<process::HistorySession>>>,
 }
 
 impl App {
     pub fn new() -> Result<Self> {
         crate::config::init()?;
-        let profiles = profiles_with_account_status()?;
-        Ok(Self {
+        let profiles = profile::list()?;
+        let mut app = Self {
             screen: Screen::List,
             input_mode: InputMode::None,
             profiles,
@@ -29,14 +34,21 @@ impl App {
             doctor_checks: Vec::new(),
             history_sessions: Vec::new(),
             selected_history: 0,
-        })
+            status_loading: false,
+            history_loading: false,
+            status_rx: None,
+            history_rx: None,
+        };
+        app.start_status_refresh();
+        Ok(app)
     }
 
     pub fn refresh_profiles(&mut self) -> Result<()> {
-        self.profiles = profiles_with_account_status()?;
+        self.profiles = profile::list()?;
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len().saturating_sub(1);
         }
+        self.start_status_refresh();
         Ok(())
     }
 
@@ -70,11 +82,74 @@ impl App {
     }
 
     pub fn refresh_history_sessions(&mut self) -> Result<()> {
-        self.history_sessions = all_history_sessions(&self.profiles);
-        self.selected_history = self
-            .selected_history
-            .min(self.history_sessions.len().saturating_sub(1));
+        self.start_history_refresh();
         Ok(())
+    }
+
+    pub fn poll_background(&mut self) {
+        if let Some(rx) = self.status_rx.take() {
+            match rx.try_recv() {
+                Ok(statuses) => {
+                    for (name, status) in statuses {
+                        if let Some(profile) = self
+                            .profiles
+                            .iter_mut()
+                            .find(|profile| profile.name == name)
+                        {
+                            profile.apply_account_status(status);
+                        }
+                    }
+                    self.status_loading = false;
+                }
+                Err(mpsc::TryRecvError::Empty) => self.status_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => self.status_loading = false,
+            }
+        }
+        if let Some(rx) = self.history_rx.take() {
+            match rx.try_recv() {
+                Ok(sessions) => {
+                    self.history_sessions = sessions;
+                    self.selected_history = self
+                        .selected_history
+                        .min(self.history_sessions.len().saturating_sub(1));
+                    self.history_loading = false;
+                }
+                Err(mpsc::TryRecvError::Empty) => self.history_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => self.history_loading = false,
+            }
+        }
+    }
+
+    pub fn start_status_refresh(&mut self) {
+        let names: Vec<_> = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.logged_in)
+            .map(|profile| profile.name.clone())
+            .collect();
+        let (tx, rx) = mpsc::channel();
+        self.status_loading = true;
+        self.status_rx = Some(rx);
+        thread::spawn(move || {
+            let statuses = account_statuses(names);
+            let _ = tx.send(statuses);
+        });
+    }
+
+    pub fn start_history_refresh(&mut self) {
+        let names: Vec<_> = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.logged_in)
+            .map(|profile| profile.name.clone())
+            .collect();
+        let (tx, rx) = mpsc::channel();
+        self.history_loading = true;
+        self.history_rx = Some(rx);
+        thread::spawn(move || {
+            let sessions = all_history_sessions(names);
+            let _ = tx.send(sessions);
+        });
     }
 
     pub fn set_message(&mut self, msg: impl Into<String>) {
@@ -83,38 +158,26 @@ impl App {
     }
 }
 
-fn profiles_with_account_status() -> Result<Vec<profile::ProfileInfo>> {
-    let mut profiles = profile::list()?;
-    let handles: Vec<_> = profiles
-        .iter()
-        .filter(|profile| profile.logged_in)
-        .map(|profile| {
-            let name = profile.name.clone();
+fn account_statuses(names: Vec<String>) -> Vec<(String, process::AccountStatus)> {
+    let handles: Vec<_> = names
+        .into_iter()
+        .map(|name| {
             thread::spawn(move || {
                 let status = process::codex_account_status(&name).ok()?;
                 Some((name, status))
             })
         })
         .collect();
-
-    for handle in handles {
-        let Some((name, status)) = handle.join().ok().flatten() else {
-            continue;
-        };
-        if let Some(profile) = profiles.iter_mut().find(|profile| profile.name == name) {
-            profile.apply_account_status(status);
-        }
-    }
-
-    Ok(profiles)
+    handles
+        .into_iter()
+        .filter_map(|handle| handle.join().ok().flatten())
+        .collect()
 }
 
-fn all_history_sessions(profiles: &[profile::ProfileInfo]) -> Vec<process::HistorySession> {
-    let handles: Vec<_> = profiles
-        .iter()
-        .filter(|profile| profile.logged_in)
-        .map(|profile| {
-            let name = profile.name.clone();
+fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
+    let handles: Vec<_> = names
+        .into_iter()
+        .map(|name| {
             thread::spawn(move || process::codex_history_sessions(&name, 200).unwrap_or_default())
         })
         .collect();

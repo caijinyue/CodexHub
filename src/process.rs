@@ -19,6 +19,7 @@ pub struct HistorySession {
     pub session_id: String,
     pub title: String,
     pub cwd: Option<String>,
+    pub path: Option<String>,
     pub updated_at: i64,
 }
 
@@ -38,6 +39,19 @@ pub fn codex_exec(name: &str, args: &[String]) -> Result<i32> {
 
 pub fn codex_resume(name: &str, session_id: &str) -> Result<i32> {
     run_codex(name, ["resume", "--all", session_id])
+}
+
+pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &str) -> Result<i32> {
+    if session.profile == target_profile {
+        return codex_resume(target_profile, &session.session_id);
+    }
+
+    let path = session
+        .path
+        .as_deref()
+        .context("Selected session does not expose a rollout path")?;
+    profile::copy_session_to_profile(&session.profile, target_profile, &session.session_id, path)?;
+    codex_resume(target_profile, &session.session_id)
 }
 
 pub fn run_codex<'a, I>(name: &str, args: I) -> Result<i32>
@@ -144,6 +158,7 @@ fn parse_history_sessions(profile: &str, text: &str) -> Option<Vec<HistorySessio
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or_else(|| trim_preview(&thread.preview)),
                     cwd: thread.cwd,
+                    path: thread.path,
                     updated_at: thread.updated_at,
                 })
                 .collect();
@@ -210,6 +225,7 @@ struct ThreadSummary {
     #[serde(rename = "updatedAt")]
     updated_at: i64,
     cwd: Option<String>,
+    path: Option<String>,
     name: Option<String>,
 }
 
@@ -234,7 +250,7 @@ mod tests {
     fn parses_resume_thread_list() {
         let output = r#"{"id":1,"result":{"codexHome":"/tmp"}}
 {"method":"remoteControl/status/changed","params":{"status":"disabled"}}
-{"id":3,"result":{"data":[{"id":"t1","sessionId":"s1","preview":"first user request with a long enough preview","updatedAt":200,"cwd":"/repo","name":null},{"id":"t2","sessionId":"s2","preview":"ignored","updatedAt":300,"cwd":"/repo2","name":"Named thread"}],"nextCursor":null,"backwardsCursor":null}}"#;
+{"id":3,"result":{"data":[{"id":"t1","sessionId":"s1","preview":"first user request with a long enough preview","updatedAt":200,"cwd":"/repo","path":"/tmp/source/sessions/rollout-s1.jsonl","name":null},{"id":"t2","sessionId":"s2","preview":"ignored","updatedAt":300,"cwd":"/repo2","path":"/tmp/source/sessions/rollout-s2.jsonl","name":"Named thread"}],"nextCursor":null,"backwardsCursor":null}}"#;
 
         let sessions = parse_history_sessions("work", output).unwrap();
 
@@ -243,5 +259,9 @@ mod tests {
         assert_eq!(sessions[0].title, "Named thread");
         assert_eq!(sessions[1].profile, "work");
         assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
+        assert_eq!(
+            sessions[1].path.as_deref(),
+            Some("/tmp/source/sessions/rollout-s1.jsonl")
+        );
     }
 }

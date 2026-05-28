@@ -13,6 +13,7 @@ pub enum InputMode {
     ImportDefault,
     ImportSub2,
     DeleteConfirm,
+    ContinueProfile,
     ExecPrompt,
     ShareConfirm,
     UnshareConfirm,
