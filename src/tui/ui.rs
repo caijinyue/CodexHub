@@ -68,15 +68,15 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
                     .add_modifier(Modifier::BOLD),
             )),
             Cell::from(login),
+            Cell::from(p.plan_type.clone().unwrap_or_else(|| "-".into())),
+            Cell::from(percent(p.limit_5h_remaining)),
+            Cell::from(percent(p.limit_7day_remaining)),
+            Cell::from(expiry(p.plan_expires_at)),
             Cell::from(Span::styled(auth, Style::default().fg(widgets::MUTED))),
             Cell::from(size::human(p.sessions_size)),
             Cell::from(size::human(p.logs_size)),
             Cell::from(size::human(p.total_size)),
             Cell::from(shared),
-            Cell::from(Span::styled(
-                p.path.display().to_string(),
-                Style::default().fg(widgets::MUTED),
-            )),
         ])
         .style(style)
     });
@@ -85,17 +85,21 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         [
             Constraint::Length(16),
             Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Length(16),
             Constraint::Length(18),
             Constraint::Length(10),
             Constraint::Length(10),
             Constraint::Length(10),
             Constraint::Length(8),
-            Constraint::Min(20),
         ],
     )
     .header(
         Row::new([
-            "Name", "Login", "Auth Age", "Sessions", "Logs", "Total", "Shared", "Path",
+            "Name", "Login", "Plan", "5h", "7day", "Expires", "Auth Age", "Sessions", "Logs",
+            "Total", "Shared",
         ])
         .style(widgets::header_style()),
     )
@@ -166,6 +170,10 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
                         .unwrap_or(false)
                 ),
                 format!("Auth Inode: {auth_inode}"),
+                format!("Plan: {}", p.plan_type.unwrap_or_else(|| "-".into())),
+                format!("5h Remaining: {}", percent(p.limit_5h_remaining)),
+                format!("7day Remaining: {}", percent(p.limit_7day_remaining)),
+                format!("Plan Expires: {}", expiry(p.plan_expires_at)),
                 format!("Config Exists: {}", p.path.join("config.toml").exists()),
                 format!(
                     "History Size: {}",
@@ -206,6 +214,18 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
         ]),
         chunks[1],
     );
+}
+
+fn percent(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "-".into())
+}
+
+fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
+    value
+        .map(|value| value.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "-".into())
 }
 
 fn draw_doctor(frame: &mut Frame<'_>, app: &App) {

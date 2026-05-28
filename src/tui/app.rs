@@ -1,6 +1,7 @@
 use super::screens::{InputMode, Screen};
-use crate::{doctor, profile};
+use crate::{doctor, process, profile};
 use anyhow::Result;
+use std::thread;
 
 pub struct App {
     pub screen: Screen,
@@ -15,10 +16,11 @@ pub struct App {
 impl App {
     pub fn new() -> Result<Self> {
         crate::config::init()?;
+        let profiles = profiles_with_account_status()?;
         Ok(Self {
             screen: Screen::List,
             input_mode: InputMode::None,
-            profiles: profile::list()?,
+            profiles,
             selected: 0,
             input: String::new(),
             message: String::new(),
@@ -27,7 +29,7 @@ impl App {
     }
 
     pub fn refresh_profiles(&mut self) -> Result<()> {
-        self.profiles = profile::list()?;
+        self.profiles = profiles_with_account_status()?;
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len().saturating_sub(1);
         }
@@ -52,4 +54,30 @@ impl App {
         self.message = msg.into();
         self.input_mode = InputMode::Message;
     }
+}
+
+fn profiles_with_account_status() -> Result<Vec<profile::ProfileInfo>> {
+    let mut profiles = profile::list()?;
+    let handles: Vec<_> = profiles
+        .iter()
+        .filter(|profile| profile.logged_in)
+        .map(|profile| {
+            let name = profile.name.clone();
+            thread::spawn(move || {
+                let status = process::codex_account_status(&name).ok()?;
+                Some((name, status))
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        let Some((name, status)) = handle.join().ok().flatten() else {
+            continue;
+        };
+        if let Some(profile) = profiles.iter_mut().find(|profile| profile.name == name) {
+            profile.apply_account_status(status);
+        }
+    }
+
+    Ok(profiles)
 }

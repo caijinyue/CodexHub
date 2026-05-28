@@ -86,6 +86,8 @@ codexhub
 
 [Doctor Screenshot]
 
+The profile list automatically reads each logged-in profile's Codex account status through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
+
 ## Shared Cache
 
 Only low-risk cache-like paths can be shared, and sharing is implemented with symlinks into `~/.codexhub/shared`:

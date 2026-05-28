@@ -14,10 +14,24 @@ pub struct ProfileInfo {
     pub path: PathBuf,
     pub logged_in: bool,
     pub auth_mtime: Option<DateTime<Local>>,
+    pub plan_type: Option<String>,
+    pub limit_5h_remaining: Option<u8>,
+    pub limit_7day_remaining: Option<u8>,
+    pub plan_expires_at: Option<DateTime<Local>>,
     pub sessions_size: u64,
     pub logs_size: u64,
     pub total_size: u64,
     pub shared_cache: bool,
+}
+
+impl ProfileInfo {
+    pub fn apply_account_status(&mut self, status: crate::process::AccountStatus) {
+        if status.plan_type.is_some() {
+            self.plan_type = status.plan_type;
+        }
+        self.limit_5h_remaining = status.primary_remaining_percent;
+        self.limit_7day_remaining = status.secondary_remaining_percent;
+    }
 }
 
 pub fn profile_path(name: &str) -> Result<PathBuf> {
@@ -116,6 +130,8 @@ pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<
             "refresh_token": account.credentials.refresh_token,
             "account_id": account.credentials.account_id,
         },
+        "plan_expires_at": account.credentials.expires_at,
+        "plan_type": account.credentials.plan_type,
         "last_refresh": account.extra.last_refresh.or(export.exported_at),
     });
     fs::write(target.join("auth.json"), serde_json::to_vec_pretty(&auth)?)
@@ -214,6 +230,8 @@ struct Sub2Credentials {
     id_token: String,
     account_id: String,
     email: Option<String>,
+    expires_at: Option<i64>,
+    plan_type: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -247,6 +265,7 @@ pub fn list() -> Result<Vec<ProfileInfo>> {
         out.push(metadata(&name)?);
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
+    sort_by_plan_expiry(&mut out);
     Ok(out)
 }
 
@@ -254,10 +273,17 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
     let path = ensure_exists(name)?;
     let auth = path.join("auth.json");
     let logged_in = auth.exists();
+    let auth_json = read_auth_json(&auth);
     let auth_mtime = fs::metadata(&auth)
         .and_then(|m| m.modified())
         .ok()
         .map(DateTime::<Local>::from);
+    let plan_type = auth_json
+        .as_ref()
+        .and_then(|value| value.pointer("/plan_type"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plan_expires_at = auth_json.as_ref().and_then(plan_expires_at);
     let sessions_size = size::path_size(&path.join("sessions"))?;
     let logs_size = logs_size(&path)?;
     let total_size = size::path_size(&path)?;
@@ -271,11 +297,78 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
         path,
         logged_in,
         auth_mtime,
+        plan_type,
+        limit_5h_remaining: None,
+        limit_7day_remaining: None,
+        plan_expires_at,
         sessions_size,
         logs_size,
         total_size,
         shared_cache,
     })
+}
+
+fn sort_by_plan_expiry(profiles: &mut [ProfileInfo]) {
+    profiles.sort_by(|a, b| {
+        match (a.plan_expires_at, b.plan_expires_at) {
+            (Some(a_time), Some(b_time)) => a_time.timestamp().cmp(&b_time.timestamp()),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn read_auth_json(path: &Path) -> Option<Value> {
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn plan_expires_at(value: &Value) -> Option<DateTime<Local>> {
+    value
+        .pointer("/plan_expires_at")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            value
+                .pointer("/tokens/access_token")
+                .and_then(Value::as_str)
+                .and_then(jwt_exp)
+        })
+        .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
+        .map(DateTime::<Local>::from)
+}
+
+fn jwt_exp(token: &str) -> Option<i64> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = decode_base64_url(payload)?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    value.pointer("/exp").and_then(Value::as_i64)
+}
+
+fn decode_base64_url(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u8;
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            b'=' => break,
+            _ => return None,
+        } as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 fn logs_size(path: &std::path::Path) -> Result<u64> {
@@ -395,7 +488,9 @@ mod tests {
                     "refresh_token": "refresh-value",
                     "id_token": "id-value",
                     "account_id": "account-value",
-                    "email": "person@example.com"
+                    "email": "person@example.com",
+                    "expires_at": 1780716616,
+                    "plan_type": "plus"
                   },
                   "extra": {
                     "last_refresh": "2026-05-27T17:34:20+08:00"
@@ -418,6 +513,8 @@ mod tests {
         assert_eq!(auth["tokens"]["refresh_token"], "refresh-value");
         assert_eq!(auth["tokens"]["id_token"], "id-value");
         assert_eq!(auth["tokens"]["account_id"], "account-value");
+        assert_eq!(auth["plan_expires_at"], 1780716616);
+        assert_eq!(auth["plan_type"], "plus");
         assert_eq!(auth["last_refresh"], "2026-05-27T17:34:20+08:00");
 
         fs::remove_dir_all(&root).ok();
@@ -458,5 +555,51 @@ mod tests {
         assert!(path.join("auth.json").is_file());
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn sorts_profiles_by_plan_expiry_with_unknown_last() {
+        let mut profiles = vec![
+            profile_for_sort("unknown", None),
+            profile_for_sort("late", Some(200)),
+            profile_for_sort("early", Some(100)),
+        ];
+
+        sort_by_plan_expiry(&mut profiles);
+
+        let names: Vec<_> = profiles.into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["early", "late", "unknown"]);
+    }
+
+    #[test]
+    fn reads_plan_expiry_from_access_token_exp_fallback() {
+        let value = json!({
+            "tokens": {
+                "access_token": "header.eyJleHAiOjE3ODA3MTY2MTZ9.signature"
+            }
+        });
+
+        let expires = plan_expires_at(&value).unwrap();
+
+        assert_eq!(expires.timestamp(), 1780716616);
+    }
+
+    fn profile_for_sort(name: &str, expiry: Option<i64>) -> ProfileInfo {
+        ProfileInfo {
+            name: name.to_string(),
+            path: PathBuf::new(),
+            logged_in: true,
+            auth_mtime: None,
+            plan_type: None,
+            limit_5h_remaining: None,
+            limit_7day_remaining: None,
+            plan_expires_at: expiry
+                .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
+                .map(DateTime::<Local>::from),
+            sessions_size: 0,
+            logs_size: 0,
+            total_size: 0,
+            shared_cache: false,
+        }
     }
 }

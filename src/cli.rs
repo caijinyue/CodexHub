@@ -120,18 +120,36 @@ pub fn run() -> Result<()> {
 fn print_list() -> Result<()> {
     let profiles = profile::list()?;
     println!(
-        "{:<16} {:<6} {:<19} {:>10} {:>10} {:>10} {:<6} PATH",
-        "NAME", "LOGIN", "AUTH MTIME", "SESSIONS", "LOGS", "TOTAL", "SHARED"
+        "{:<16} {:<6} {:<8} {:>5} {:>5} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} PATH",
+        "NAME",
+        "LOGIN",
+        "PLAN",
+        "5H",
+        "7DAY",
+        "EXPIRES",
+        "AUTH MTIME",
+        "SESSIONS",
+        "LOGS",
+        "TOTAL",
+        "SHARED"
     );
     for p in profiles {
         let auth = p
             .auth_mtime
             .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
             .unwrap_or_else(|| "-".into());
+        let expires = p
+            .plan_expires_at
+            .map(|t| t.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "-".into());
         println!(
-            "{:<16} {:<6} {:<19} {:>10} {:>10} {:>10} {:<6} {}",
+            "{:<16} {:<6} {:<8} {:>5} {:>5} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} {}",
             p.name,
             if p.logged_in { "yes" } else { "no" },
+            p.plan_type.unwrap_or_else(|| "-".into()),
+            percent(p.limit_5h_remaining),
+            percent(p.limit_7day_remaining),
+            expires,
             auth,
             size::human(p.sessions_size),
             size::human(p.logs_size),
@@ -141,6 +159,12 @@ fn print_list() -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn percent(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "-".into())
 }
 
 fn print_doctor(allow_auth_symlink: bool) -> Result<()> {
