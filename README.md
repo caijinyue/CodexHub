@@ -89,6 +89,8 @@ codexhub
 
 The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
 
+The TUI uses the terminal's light/dark preference when it can detect one. Press `t` to cycle the saved theme preference through `auto`, `light`, and `dark`. You can also force a theme for one run with `CODEXHUB_THEME=light` or `CODEXHUB_THEME=dark`.
+
 Press `a` from the profile list or detail screen to activate the selected profile as the current `CODEX_HOME` for tools launched outside CodexHub. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh` on Linux/macOS or `activate.ps1` on Windows, and `~/.codexhub/current_profile`. On Linux it also writes a user environment file under `~/.config/environment.d/`; on Linux/macOS/Windows it best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
 
 CodexHub checks GitHub for updates in the background when the TUI starts. If the remote repository has a newer commit, it shows an update prompt. Press `Enter` or `y` to run `git pull --ff-only` and `cargo install --path .`, or press `n`/`Esc` to skip.

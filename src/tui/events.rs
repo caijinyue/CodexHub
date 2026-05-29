@@ -49,6 +49,7 @@ fn handle_list(
 ) -> Result<bool> {
     match key.code {
         KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Down | KeyCode::Char('j') => app.move_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_up(),
         KeyCode::Enter => app.screen = Screen::Detail,
@@ -83,6 +84,7 @@ fn handle_detail(
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Char('a') => app.activate_current_profile()?,
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
@@ -102,6 +104,7 @@ fn handle_doctor(app: &mut App, key: KeyEvent) -> Result<bool> {
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Char('r') => app.doctor_checks = crate::doctor::run(false)?,
         _ => {}
     }
@@ -116,6 +119,7 @@ fn handle_history(
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,

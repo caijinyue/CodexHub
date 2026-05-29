@@ -21,12 +21,55 @@ pub struct Theme {
     pub key_fg: Color,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemePreference {
+    Auto,
+    Light,
+    Dark,
+}
+
+impl ThemePreference {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Auto => Self::Light,
+            Self::Light => Self::Dark,
+            Self::Dark => Self::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
 impl Theme {
-    pub fn detect() -> Self {
+    pub fn from_preference(preference: ThemePreference) -> Self {
+        match preference {
+            ThemePreference::Auto if detect_light_mode() => Self::light(),
+            ThemePreference::Auto => Self::dark(),
+            ThemePreference::Light => Self::light(),
+            ThemePreference::Dark => Self::dark(),
+        }
+    }
+
+    pub fn detected_preference() -> ThemePreference {
         if detect_light_mode() {
-            Self::light()
+            ThemePreference::Light
         } else {
-            Self::dark()
+            ThemePreference::Dark
         }
     }
 
@@ -188,5 +231,12 @@ mod tests {
     #[test]
     fn light_and_dark_have_different_backgrounds() {
         assert_ne!(Theme::light().bg, Theme::dark().bg);
+    }
+
+    #[test]
+    fn cycles_theme_preference() {
+        assert_eq!(ThemePreference::Auto.cycle(), ThemePreference::Light);
+        assert_eq!(ThemePreference::Light.cycle(), ThemePreference::Dark);
+        assert_eq!(ThemePreference::Dark.cycle(), ThemePreference::Auto);
     }
 }

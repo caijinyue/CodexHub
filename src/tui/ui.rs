@@ -97,6 +97,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
     } else {
         "CodexHub Profiles".to_string()
     };
+    let title = format!("{title} (theme: {})", app.theme_label());
     let table = Table::new(
         rows,
         [
@@ -147,7 +148,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
                 ),
                 ("History", &[("h", "resume")]),
                 ("Cache", &[("s", "share"), ("u", "unshare")]),
-                ("System", &[("D", "doctor"), ("q", "quit")]),
+                ("System", &[("t", "theme"), ("D", "doctor"), ("q", "quit")]),
             ],
             app.theme,
         ),
@@ -263,7 +264,7 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
                     ],
                 ),
                 ("Cache", &[("s", "share"), ("u", "unshare")]),
-                ("System", &[("D", "doctor"), ("q", "quit")]),
+                ("System", &[("t", "theme"), ("D", "doctor"), ("q", "quit")]),
             ],
             app.theme,
         ),
@@ -332,7 +333,7 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
         widgets::help_bar(
             &[
                 ("Move", &[("b", "back")]),
-                ("System", &[("r", "rerun"), ("q", "quit")]),
+                ("System", &[("t", "theme"), ("r", "rerun"), ("q", "quit")]),
             ],
             app.theme,
         ),
@@ -420,7 +421,7 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                         ("b", "back"),
                     ],
                 ),
-                ("System", &[("q", "quit")]),
+                ("System", &[("t", "theme"), ("q", "quit")]),
             ],
             app.theme,
         ),

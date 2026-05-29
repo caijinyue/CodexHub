@@ -1,6 +1,6 @@
 use super::{
     screens::{InputMode, Screen},
-    widgets::Theme,
+    widgets::{Theme, ThemePreference},
 };
 use crate::{doctor, process, profile, update};
 use anyhow::Result;
@@ -24,6 +24,7 @@ pub struct App {
     pub history_loading: bool,
     pub update_checking: bool,
     pub theme: Theme,
+    pub theme_preference: ThemePreference,
     status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
     history_rx: Option<Receiver<Vec<process::HistorySession>>>,
     update_rx: Option<Receiver<Option<update::UpdateInfo>>>,
@@ -34,6 +35,7 @@ impl App {
         crate::config::init()?;
         let profiles = profile::list()?;
         let active_profile = crate::activation::active_profile_name()?;
+        let theme_preference = load_theme_preference();
         let mut app = Self {
             screen: Screen::List,
             input_mode: InputMode::None,
@@ -50,7 +52,8 @@ impl App {
             status_loading: false,
             history_loading: false,
             update_checking: false,
-            theme: Theme::detect(),
+            theme: Theme::from_preference(theme_preference),
+            theme_preference,
             status_rx: None,
             history_rx: None,
             update_rx: None,
@@ -231,6 +234,41 @@ impl App {
         ));
         Ok(())
     }
+
+    pub fn cycle_theme(&mut self) -> Result<()> {
+        self.theme_preference = self.theme_preference.cycle();
+        self.theme = Theme::from_preference(self.theme_preference);
+        save_theme_preference(self.theme_preference)?;
+        Ok(())
+    }
+
+    pub fn theme_label(&self) -> String {
+        match self.theme_preference {
+            ThemePreference::Auto => {
+                format!("auto/{}", Theme::detected_preference().as_str())
+            }
+            preference => preference.as_str().to_string(),
+        }
+    }
+}
+
+fn load_theme_preference() -> ThemePreference {
+    let Ok(paths) = crate::config::paths() else {
+        return ThemePreference::Auto;
+    };
+    let Ok(value) = std::fs::read_to_string(paths.root.join("theme")) else {
+        return ThemePreference::Auto;
+    };
+    ThemePreference::parse(&value).unwrap_or(ThemePreference::Auto)
+}
+
+fn save_theme_preference(preference: ThemePreference) -> Result<()> {
+    let paths = crate::config::init()?;
+    std::fs::write(
+        paths.root.join("theme"),
+        format!("{}\n", preference.as_str()),
+    )?;
+    Ok(())
 }
 
 fn account_statuses(names: Vec<String>) -> Vec<(String, process::AccountStatus)> {
