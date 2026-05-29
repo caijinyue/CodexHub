@@ -100,7 +100,8 @@ fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<Stri
     let mut stdin = child.stdin.take().context("Opening app-server stdin")?;
     writeln!(
         stdin,
-        r#"{{"id":1,"method":"initialize","params":{{"clientInfo":{{"name":"codexhub","title":"CodexHub","version":"0.1.0"}},"capabilities":{{"experimentalApi":true,"requestAttestation":false}}}}}}"#
+        r#"{{"id":1,"method":"initialize","params":{{"clientInfo":{{"name":"codexhub","title":"CodexHub","version":"{}"}},"capabilities":{{"experimentalApi":true,"requestAttestation":false}}}}}}"#,
+        env!("CARGO_PKG_VERSION")
     )?;
     thread::sleep(Duration::from_millis(500));
     writeln!(stdin, "{request}")?;

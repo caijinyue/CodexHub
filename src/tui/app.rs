@@ -1,4 +1,7 @@
-use super::screens::{InputMode, Screen};
+use super::{
+    screens::{InputMode, Screen},
+    widgets::Theme,
+};
 use crate::{doctor, process, profile, update};
 use anyhow::Result;
 use std::sync::mpsc::{self, Receiver};
@@ -20,6 +23,7 @@ pub struct App {
     pub status_loading: bool,
     pub history_loading: bool,
     pub update_checking: bool,
+    pub theme: Theme,
     status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
     history_rx: Option<Receiver<Vec<process::HistorySession>>>,
     update_rx: Option<Receiver<Option<update::UpdateInfo>>>,
@@ -46,6 +50,7 @@ impl App {
             status_loading: false,
             history_loading: false,
             update_checking: false,
+            theme: Theme::detect(),
             status_rx: None,
             history_rx: None,
             update_rx: None,

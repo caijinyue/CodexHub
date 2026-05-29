@@ -37,7 +37,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
             .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
             .unwrap_or_else(|| "-".into());
         let style = if idx == app.selected {
-            widgets::selected_style()
+            widgets::selected_style(app.theme)
         } else {
             Style::default()
         };
@@ -45,21 +45,21 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
             Span::styled(
                 "yes",
                 Style::default()
-                    .fg(widgets::OK)
+                    .fg(app.theme.ok)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
-            Span::styled("no", Style::default().fg(widgets::WARN))
+            Span::styled("no", Style::default().fg(app.theme.warn))
         };
         let shared = if p.shared_cache {
             Span::styled(
                 "yes",
                 Style::default()
-                    .fg(widgets::CACHE)
+                    .fg(app.theme.cache)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
-            Span::styled("no", Style::default().fg(widgets::MUTED))
+            Span::styled("no", Style::default().fg(app.theme.muted))
         };
         let name = if app.active_profile.as_deref() == Some(p.name.as_str()) {
             format!("* {}", p.name)
@@ -70,7 +70,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
             Cell::from(Span::styled(
                 name,
                 Style::default()
-                    .fg(widgets::TEXT)
+                    .fg(app.theme.text)
                     .add_modifier(Modifier::BOLD),
             )),
             Cell::from(login),
@@ -78,7 +78,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
             Cell::from(percent(p.limit_5h_remaining)),
             Cell::from(percent(p.limit_7day_remaining)),
             Cell::from(expiry(p.plan_expires_at)),
-            Cell::from(Span::styled(auth, Style::default().fg(widgets::MUTED))),
+            Cell::from(Span::styled(auth, Style::default().fg(app.theme.muted))),
             Cell::from(size::human(p.sessions_size)),
             Cell::from(size::human(p.logs_size)),
             Cell::from(size::human(p.total_size)),
@@ -118,36 +118,39 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
             "Name", "Login", "Plan", "5h", "7day", "Expires", "Auth Age", "Sessions", "Logs",
             "Total", "Shared",
         ])
-        .style(widgets::header_style()),
+        .style(widgets::header_style(app.theme)),
     )
-    .block(widgets::block(&title));
+    .block(widgets::block(&title, app.theme));
     frame.render_widget(table, chunks[0]);
     frame.render_widget(
-        widgets::help_bar(&[
-            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
-            (
-                "Profile",
-                &[
-                    ("Enter", "detail"),
-                    ("n", "new"),
-                    ("i", "import"),
-                    ("2", "sub2"),
-                    ("d", "delete"),
-                ],
-            ),
-            (
-                "Codex",
-                &[
-                    ("a", "activate"),
-                    ("l", "login"),
-                    ("r", "run"),
-                    ("e", "exec"),
-                ],
-            ),
-            ("History", &[("h", "resume")]),
-            ("Cache", &[("s", "share"), ("u", "unshare")]),
-            ("System", &[("D", "doctor"), ("q", "quit")]),
-        ]),
+        widgets::help_bar(
+            &[
+                ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+                (
+                    "Profile",
+                    &[
+                        ("Enter", "detail"),
+                        ("n", "new"),
+                        ("i", "import"),
+                        ("2", "sub2"),
+                        ("d", "delete"),
+                    ],
+                ),
+                (
+                    "Codex",
+                    &[
+                        ("a", "activate"),
+                        ("l", "login"),
+                        ("r", "run"),
+                        ("e", "exec"),
+                    ],
+                ),
+                ("History", &[("h", "resume")]),
+                ("Cache", &[("s", "share"), ("u", "unshare")]),
+                ("System", &[("D", "doctor"), ("q", "quit")]),
+            ],
+            app.theme,
+        ),
         chunks[1],
     );
 }
@@ -156,7 +159,8 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let Some(name) = app.current_name() else {
         frame.render_widget(
-            Paragraph::new("No profile selected").block(widgets::block("Profile Detail")),
+            Paragraph::new("No profile selected")
+                .block(widgets::block("Profile Detail", app.theme)),
             area,
         );
         return;
@@ -241,25 +245,28 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
         .split(area);
     frame.render_widget(
         Paragraph::new(lines.join("\n"))
-            .block(widgets::block("Profile Detail"))
+            .block(widgets::block("Profile Detail", app.theme))
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
     frame.render_widget(
-        widgets::help_bar(&[
-            ("Move", &[("b", "back")]),
-            (
-                "Codex",
-                &[
-                    ("a", "activate"),
-                    ("l", "login"),
-                    ("r", "run"),
-                    ("e", "exec"),
-                ],
-            ),
-            ("Cache", &[("s", "share"), ("u", "unshare")]),
-            ("System", &[("D", "doctor"), ("q", "quit")]),
-        ]),
+        widgets::help_bar(
+            &[
+                ("Move", &[("b", "back")]),
+                (
+                    "Codex",
+                    &[
+                        ("a", "activate"),
+                        ("l", "login"),
+                        ("r", "run"),
+                        ("e", "exec"),
+                    ],
+                ),
+                ("Cache", &[("s", "share"), ("u", "unshare")]),
+                ("System", &[("D", "doctor"), ("q", "quit")]),
+            ],
+            app.theme,
+        ),
         chunks[1],
     );
 }
@@ -297,9 +304,9 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     let items = app.doctor_checks.iter().map(|c| {
         let color = match c.level {
-            crate::doctor::Level::Ok => widgets::OK,
-            crate::doctor::Level::Warn => widgets::WARN,
-            crate::doctor::Level::Error => widgets::ERROR,
+            crate::doctor::Level::Ok => app.theme.ok,
+            crate::doctor::Level::Warn => app.theme.warn,
+            crate::doctor::Level::Error => app.theme.error,
         };
         ListItem::new(Line::from(vec![
             Span::styled(
@@ -308,21 +315,27 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
             ),
             Span::styled(
                 format!(" {}: ", c.subject),
-                Style::default().fg(widgets::TITLE),
+                Style::default().fg(app.theme.title),
             ),
-            Span::styled(c.message.clone(), Style::default().fg(widgets::TEXT)),
+            Span::styled(c.message.clone(), Style::default().fg(app.theme.text)),
         ]))
     });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(area);
-    frame.render_widget(List::new(items).block(widgets::block("Doctor")), chunks[0]);
     frame.render_widget(
-        widgets::help_bar(&[
-            ("Move", &[("b", "back")]),
-            ("System", &[("r", "rerun"), ("q", "quit")]),
-        ]),
+        List::new(items).block(widgets::block("Doctor", app.theme)),
+        chunks[0],
+    );
+    frame.render_widget(
+        widgets::help_bar(
+            &[
+                ("Move", &[("b", "back")]),
+                ("System", &[("r", "rerun"), ("q", "quit")]),
+            ],
+            app.theme,
+        ),
         chunks[1],
     );
 }
@@ -346,14 +359,14 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
         .take(visible_rows)
         .map(|(idx, session)| {
             let style = if idx == app.selected_history {
-                widgets::selected_style()
+                widgets::selected_style(app.theme)
             } else {
                 Style::default()
             };
             Row::new(vec![
                 Cell::from(Span::styled(
                     session.profile.clone(),
-                    Style::default().fg(widgets::TEXT),
+                    Style::default().fg(app.theme.text),
                 )),
                 Cell::from(history_time(session.updated_at)),
                 Cell::from(session.title.clone()),
@@ -366,7 +379,7 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                 ),
                 Cell::from(Span::styled(
                     session.session_id.clone(),
-                    Style::default().fg(widgets::MUTED),
+                    Style::default().fg(app.theme.muted),
                 )),
             ])
             .style(style)
@@ -382,28 +395,35 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
         ],
     )
     .header(
-        Row::new(["Profile", "Updated", "Title", "CWD", "Session"]).style(widgets::header_style()),
+        Row::new(["Profile", "Updated", "Title", "CWD", "Session"])
+            .style(widgets::header_style(app.theme)),
     )
-    .block(widgets::block(if app.history_loading {
-        "Resume Sessions (loading...)"
-    } else {
-        "Resume Sessions"
-    }));
+    .block(widgets::block(
+        if app.history_loading {
+            "Resume Sessions (loading...)"
+        } else {
+            "Resume Sessions"
+        },
+        app.theme,
+    ));
     frame.render_widget(table, chunks[0]);
     frame.render_widget(
-        widgets::help_bar(&[
-            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
-            (
-                "Session",
-                &[
-                    ("Enter", "resume"),
-                    ("c", "continue as"),
-                    ("r", "refresh"),
-                    ("b", "back"),
-                ],
-            ),
-            ("System", &[("q", "quit")]),
-        ]),
+        widgets::help_bar(
+            &[
+                ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+                (
+                    "Session",
+                    &[
+                        ("Enter", "resume"),
+                        ("c", "continue as"),
+                        ("r", "refresh"),
+                        ("b", "back"),
+                    ],
+                ),
+                ("System", &[("q", "quit")]),
+            ],
+            app.theme,
+        ),
         chunks[1],
     );
 }
@@ -468,8 +488,8 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(body)
-            .block(widgets::block(title))
-            .style(Style::default().fg(widgets::TEXT).bg(widgets::BG))
+            .block(widgets::block(title, app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.bg))
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: false }),
         area,
@@ -503,23 +523,23 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
                 ""
             };
             let style = if idx == app.selected_continue_profile {
-                widgets::selected_style()
+                widgets::selected_style(app.theme)
             } else {
-                Style::default().fg(widgets::TEXT).bg(widgets::BG)
+                Style::default().fg(app.theme.text).bg(app.theme.bg)
             };
             ListItem::new(Line::from(vec![
                 Span::styled(
                     profile.name.clone(),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(marker, Style::default().fg(widgets::MUTED)),
+                Span::styled(marker, Style::default().fg(app.theme.muted)),
             ]))
             .style(style)
         });
     frame.render_widget(
         List::new(items)
-            .block(widgets::block("Continue With Profile"))
-            .style(Style::default().fg(widgets::TEXT).bg(widgets::BG)),
+            .block(widgets::block("Continue With Profile", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.bg)),
         area,
     );
 }
