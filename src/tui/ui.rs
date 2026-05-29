@@ -3,19 +3,19 @@ use super::{
     screens::{InputMode, Screen},
     widgets,
 };
-use crate::size;
+use crate::{profile::ProfileInfo, size};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::Frame,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap},
 };
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     match app.screen {
-        Screen::List => draw_list(frame, app),
-        Screen::Detail => draw_detail(frame, app),
+        Screen::List => draw_profile_workspace(frame, app),
+        Screen::Detail => draw_profile_workspace(frame, app),
         Screen::Doctor => draw_doctor(frame, app),
         Screen::History => draw_history(frame, app),
     }
@@ -24,285 +24,315 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-fn draw_list(frame: &mut Frame<'_>, app: &App) {
+fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    let chunks = Layout::default()
+    let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(4)])
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
         .split(area);
-
-    let rows = app.profiles.iter().enumerate().map(|(idx, p)| {
-        let auth = p
-            .auth_mtime
-            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "-".into());
-        let style = if idx == app.selected {
-            widgets::selected_style(app.theme)
-        } else {
-            Style::default()
-        };
-        let login = if p.logged_in {
-            Span::styled(
-                "yes",
-                Style::default()
-                    .fg(app.theme.ok)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled("no", Style::default().fg(app.theme.warn))
-        };
-        let shared = if p.shared_cache {
-            Span::styled(
-                "yes",
-                Style::default()
-                    .fg(app.theme.cache)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled("no", Style::default().fg(app.theme.muted))
-        };
-        let name = if app.active_profile.as_deref() == Some(p.name.as_str()) {
-            format!("* {}", p.name)
-        } else {
-            p.name.clone()
-        };
-        Row::new(vec![
-            Cell::from(Span::styled(
-                name,
-                Style::default()
-                    .fg(app.theme.text)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Cell::from(login),
-            Cell::from(p.plan_type.clone().unwrap_or_else(|| "-".into())),
-            Cell::from(percent(p.limit_5h_remaining)),
-            Cell::from(percent(p.limit_7day_remaining)),
-            Cell::from(expiry(p.plan_expires_at)),
-            Cell::from(Span::styled(auth, Style::default().fg(app.theme.muted))),
-            Cell::from(size::human(p.sessions_size)),
-            Cell::from(size::human(p.logs_size)),
-            Cell::from(size::human(p.total_size)),
-            Cell::from(shared),
-        ])
-        .style(style)
-    });
-    let title = if let Some(active) = &app.active_profile {
-        if app.status_loading {
-            format!("CodexHub Profiles (active: {active}, loading status...)")
-        } else {
-            format!("CodexHub Profiles (active: {active})")
-        }
-    } else if app.status_loading {
-        "CodexHub Profiles (loading status...)".to_string()
+    let body = if vertical[0].width < 88 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(12), Constraint::Min(12)])
+            .split(vertical[0])
     } else {
-        "CodexHub Profiles".to_string()
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(32), Constraint::Min(48)])
+            .split(vertical[0])
     };
-    let title = format!("{title} (theme: {})", app.theme_label());
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(16),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(16),
-            Constraint::Length(18),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Length(8),
+
+    draw_profile_sidebar(frame, app, body[0]);
+    draw_profile_main(frame, app, body[1]);
+    draw_footer(
+        frame,
+        app,
+        vertical[1],
+        &[
+            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+            (
+                "Profile",
+                &[
+                    ("Enter", "detail"),
+                    ("n", "new"),
+                    ("i", "import"),
+                    ("2", "sub2"),
+                    ("d", "delete"),
+                ],
+            ),
+            (
+                "Codex",
+                &[
+                    ("a", "activate"),
+                    ("l", "login"),
+                    ("r", "run"),
+                    ("e", "exec"),
+                ],
+            ),
+            (
+                "System",
+                &[
+                    ("h", "history"),
+                    ("t", "theme"),
+                    ("D", "doctor"),
+                    ("q", "quit"),
+                ],
+            ),
         ],
-    )
-    .header(
-        Row::new([
-            "Name", "Login", "Plan", "5h", "7day", "Expires", "Auth Age", "Sessions", "Logs",
-            "Total", "Shared",
-        ])
-        .style(widgets::header_style(app.theme)),
-    )
-    .block(widgets::block(&title, app.theme));
-    frame.render_widget(table, chunks[0]);
-    frame.render_widget(
-        widgets::help_bar(
-            &[
-                ("Move", &[("↑↓", "select"), ("j/k", "select")]),
-                (
-                    "Profile",
-                    &[
-                        ("Enter", "detail"),
-                        ("n", "new"),
-                        ("i", "import"),
-                        ("2", "sub2"),
-                        ("d", "delete"),
-                    ],
-                ),
-                (
-                    "Codex",
-                    &[
-                        ("a", "activate"),
-                        ("l", "login"),
-                        ("r", "run"),
-                        ("e", "exec"),
-                    ],
-                ),
-                ("History", &[("h", "resume")]),
-                ("Cache", &[("s", "share"), ("u", "unshare")]),
-                ("System", &[("t", "theme"), ("D", "doctor"), ("q", "quit")]),
-            ],
-            app.theme,
-        ),
-        chunks[1],
     );
 }
 
-fn draw_detail(frame: &mut Frame<'_>, app: &App) {
-    let area = frame.area();
-    let Some(name) = app.current_name() else {
+fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(5)])
+        .split(area);
+    let active = app.active_profile.as_deref().unwrap_or("-");
+    let summary = vec![
+        Line::from(vec![
+            Span::styled("Active ", Style::default().fg(app.theme.muted)),
+            Span::styled(
+                active.to_string(),
+                Style::default()
+                    .fg(app.theme.title)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Theme  ", Style::default().fg(app.theme.muted)),
+            Span::styled(app.theme_label(), Style::default().fg(app.theme.text)),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(summary)
+            .block(widgets::block("CodexHub", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
+        inner[0],
+    );
+
+    let visible = usize::from(inner[1].height.saturating_sub(2)).max(1);
+    let start = app.selected.saturating_add(1).saturating_sub(visible);
+    let items = app
+        .profiles
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(idx, profile)| {
+            let selected = idx == app.selected;
+            let active = app.active_profile.as_deref() == Some(profile.name.as_str());
+            let status = if profile.logged_in {
+                "signed in"
+            } else {
+                "not signed in"
+            };
+            let quota = format!(
+                "5h {}  7d {}",
+                percent(profile.limit_5h_remaining),
+                percent(profile.limit_7day_remaining)
+            );
+            let title = if active {
+                format!("▌ {}  ACTIVE", profile.name)
+            } else {
+                format!("  {}", profile.name)
+            };
+            let style = if selected {
+                widgets::selected_style(app.theme)
+            } else {
+                Style::default().fg(app.theme.text).bg(app.theme.surface)
+            };
+            ListItem::new(vec![
+                Line::from(Span::styled(
+                    title,
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(vec![
+                    Span::styled(
+                        status,
+                        Style::default().fg(if profile.logged_in {
+                            app.theme.ok
+                        } else {
+                            app.theme.warn
+                        }),
+                    ),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(quota, Style::default().fg(app.theme.muted)),
+                ]),
+            ])
+            .style(style)
+        });
+    frame.render_widget(
+        List::new(items)
+            .block(widgets::block("Profiles", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
+        inner[1],
+    );
+}
+
+fn draw_profile_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let Some(profile) = app.profiles.get(app.selected) else {
         frame.render_widget(
             Paragraph::new("No profile selected")
-                .block(widgets::block("Profile Detail", app.theme)),
+                .block(widgets::block("Profile", app.theme))
+                .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
             area,
         );
         return;
     };
-    let lines = match crate::profile::metadata(&name) {
-        Ok(p) => {
-            let auth = p.path.join("auth.json");
-            let auth_meta = std::fs::symlink_metadata(&auth).ok();
-            #[cfg(unix)]
-            let auth_inode = std::fs::metadata(&auth)
-                .ok()
-                .map(|m| {
-                    use std::os::unix::fs::MetadataExt;
-                    m.ino().to_string()
-                })
-                .unwrap_or_else(|| "-".into());
-            #[cfg(not(unix))]
-            let auth_inode = "-".to_string();
-            let active_env = crate::config::paths()
-                .map(|paths| paths.root.join("current.env").display().to_string())
-                .unwrap_or_else(|_| "-".into());
-            vec![
-                format!("Profile Name: {}", p.name),
-                format!("Profile Path: {}", p.path.display()),
-                format!(
-                    "Active Profile: {}",
-                    if app.active_profile.as_deref() == Some(name.as_str()) {
-                        "yes"
-                    } else {
-                        "no"
-                    }
-                ),
-                format!(
-                    "Active Env: {}",
-                    app.active_profile
-                        .as_ref()
-                        .map(|_| active_env.as_str())
-                        .unwrap_or("-")
-                ),
-                format!("Auth Exists: {}", auth.exists()),
-                format!(
-                    "Auth Mtime: {}",
-                    p.auth_mtime
-                        .map(|t| t.to_rfc3339())
-                        .unwrap_or_else(|| "-".into())
-                ),
-                format!(
-                    "Auth Is Symlink: {}",
-                    auth_meta
-                        .map(|m| m.file_type().is_symlink())
-                        .unwrap_or(false)
-                ),
-                format!("Auth Inode: {auth_inode}"),
-                format!("Plan: {}", p.plan_type.unwrap_or_else(|| "-".into())),
-                format!("5h Remaining: {}", percent(p.limit_5h_remaining)),
-                format!("7day Remaining: {}", percent(p.limit_7day_remaining)),
-                format!("Plan Expires: {}", expiry(p.plan_expires_at)),
-                format!("Config Exists: {}", p.path.join("config.toml").exists()),
-                format!(
-                    "History Size: {}",
-                    size::human(size::path_size(&p.path.join("history.jsonl")).unwrap_or(0))
-                ),
-                format!(
-                    "Session Index Size: {}",
-                    size::human(size::path_size(&p.path.join("session_index.jsonl")).unwrap_or(0))
-                ),
-                format!("Sessions Size: {}", size::human(p.sessions_size)),
-                format!("Logs Size: {}", size::human(p.logs_size)),
-                format!("Total Size: {}", size::human(p.total_size)),
-                format!(
-                    "Shared Cache Status: {}",
-                    if p.shared_cache { "yes" } else { "no" }
-                ),
-                format!("Broken Symlinks: {}", broken_symlinks(&p.path).join(", ")),
-            ]
-        }
-        Err(err) => vec![format!("Error: {err}")],
-    };
-    let chunks = Layout::default()
+
+    let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(4)])
+        .constraints([
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Min(8),
+        ])
+        .split(area);
+    draw_profile_header(frame, app, profile, sections[0]);
+    draw_quota_panel(frame, app, profile, sections[1]);
+    draw_profile_details(frame, app, profile, sections[2]);
+}
+
+fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
+    let active = app.active_profile.as_deref() == Some(profile.name.as_str());
+    let status = if profile.logged_in {
+        "SIGNED IN"
+    } else {
+        "NOT SIGNED IN"
+    };
+    let plan = profile.plan_type.clone().unwrap_or_else(|| "-".into());
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                profile.name.clone(),
+                Style::default()
+                    .fg(app.theme.title)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if active { "  ACTIVE" } else { "" },
+                Style::default()
+                    .fg(app.theme.ok)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                status,
+                Style::default()
+                    .fg(if profile.logged_in {
+                        app.theme.ok
+                    } else {
+                        app.theme.warn
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  Plan ", Style::default().fg(app.theme.muted)),
+            Span::styled(plan, Style::default().fg(app.theme.text)),
+            Span::styled("  Expires ", Style::default().fg(app.theme.muted)),
+            Span::styled(
+                expiry(profile.plan_expires_at),
+                Style::default().fg(app.theme.text),
+            ),
+        ]),
+        Line::from(Span::styled(
+            profile.path.display().to_string(),
+            Style::default().fg(app.theme.muted),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(widgets::block("Selected Profile", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
+        area,
+    );
+}
+
+fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
         .split(area);
     frame.render_widget(
-        Paragraph::new(lines.join("\n"))
-            .block(widgets::block("Profile Detail", app.theme))
-            .wrap(Wrap { trim: false }),
-        chunks[0],
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Quota")
+            .border_style(Style::default().fg(app.theme.border))
+            .style(Style::default().bg(app.theme.panel)),
+        area,
     );
-    frame.render_widget(
-        widgets::help_bar(
-            &[
-                ("Move", &[("b", "back")]),
-                (
-                    "Codex",
-                    &[
-                        ("a", "activate"),
-                        ("l", "login"),
-                        ("r", "run"),
-                        ("e", "exec"),
-                    ],
-                ),
-                ("Cache", &[("s", "share"), ("u", "unshare")]),
-                ("System", &[("t", "theme"), ("D", "doctor"), ("q", "quit")]),
-            ],
-            app.theme,
-        ),
-        chunks[1],
-    );
+    draw_gauge(frame, app, rows[0], "5h", profile.limit_5h_remaining);
+    draw_gauge(frame, app, rows[1], "7day", profile.limit_7day_remaining);
 }
 
-fn percent(value: Option<u8>) -> String {
-    value
-        .map(|value| format!("{value}%"))
-        .unwrap_or_else(|| "-".into())
-}
-
-fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
-    value
-        .map(|value| value.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| "-".into())
-}
-
-fn history_time(timestamp: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
-        .map(chrono::DateTime::<chrono::Local>::from)
-        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "-".into())
-}
-
-fn short_home(path: &str) -> String {
-    let Some(home) = dirs::home_dir() else {
-        return path.to_string();
+fn draw_gauge(frame: &mut Frame<'_>, app: &App, area: Rect, label: &str, value: Option<u8>) {
+    let value = value.unwrap_or(0).min(100);
+    let gauge_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y,
+        width: area.width.saturating_sub(4),
+        height: area.height,
     };
-    let home = home.to_string_lossy();
-    path.strip_prefix(home.as_ref())
-        .map(|rest| format!("~{rest}"))
-        .unwrap_or_else(|| path.to_string())
+    frame.render_widget(
+        Gauge::default()
+            .label(format!("{label} remaining {value}%"))
+            .ratio(f64::from(value) / 100.0)
+            .gauge_style(
+                Style::default()
+                    .fg(quota_color(app, value))
+                    .bg(app.theme.surface)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        gauge_area,
+    );
+}
+
+fn draw_profile_details(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
+    let auth = profile.path.join("auth.json");
+    let config = profile.path.join("config.toml");
+    let active_env = crate::config::paths()
+        .map(|paths| paths.root.join("current.env").display().to_string())
+        .unwrap_or_else(|_| "-".into());
+    let rows = vec![
+        detail_row("Auth exists", bool_label(auth.exists())),
+        detail_row(
+            "Auth mtime",
+            profile
+                .auth_mtime
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row("Config exists", bool_label(config.exists())),
+        detail_row(
+            "Active env",
+            if app.active_profile.is_some() {
+                active_env
+            } else {
+                "-".into()
+            },
+        ),
+        detail_row("Sessions", size::human(profile.sessions_size)),
+        detail_row("Logs", size::human(profile.logs_size)),
+        detail_row("Total", size::human(profile.total_size)),
+        detail_row("Shared cache", bool_label(profile.shared_cache)),
+    ];
+    let table = Table::new(rows, [Constraint::Length(16), Constraint::Min(20)])
+        .block(widgets::block("Details", app.theme))
+        .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+        .column_spacing(2);
+    frame.render_widget(table, area);
 }
 
 fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(3)])
+        .split(area);
     let items = app.doctor_checks.iter().map(|c| {
         let color = match c.level {
             crate::doctor::Level::Ok => app.theme.ok,
@@ -321,111 +351,176 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
             Span::styled(c.message.clone(), Style::default().fg(app.theme.text)),
         ]))
     });
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(4)])
-        .split(area);
     frame.render_widget(
-        List::new(items).block(widgets::block("Doctor", app.theme)),
+        List::new(items)
+            .block(widgets::block("Doctor", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
         chunks[0],
     );
-    frame.render_widget(
-        widgets::help_bar(
-            &[
-                ("Move", &[("b", "back")]),
-                ("System", &[("t", "theme"), ("r", "rerun"), ("q", "quit")]),
-            ],
-            app.theme,
-        ),
+    draw_footer(
+        frame,
+        app,
         chunks[1],
+        &[
+            ("Move", &[("b", "back")]),
+            ("System", &[("t", "theme"), ("r", "rerun"), ("q", "quit")]),
+        ],
     );
 }
 
 fn draw_history(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    let chunks = Layout::default()
+    let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(4)])
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
         .split(area);
-    let visible_rows = usize::from(chunks[0].height.saturating_sub(3)).max(1);
+    let body = if vertical[0].width < 92 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(vertical[0])
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(vertical[0])
+    };
+    draw_session_list(frame, app, body[0]);
+    draw_session_detail(frame, app, body[1]);
+    draw_footer(
+        frame,
+        app,
+        vertical[1],
+        &[
+            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
+            (
+                "Session",
+                &[
+                    ("Enter", "resume"),
+                    ("c", "continue as"),
+                    ("r", "refresh"),
+                    ("b", "back"),
+                ],
+            ),
+            ("System", &[("t", "theme"), ("q", "quit")]),
+        ],
+    );
+}
+
+fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let visible = usize::from(area.height.saturating_sub(2)).max(1);
     let start = app
         .selected_history
         .saturating_add(1)
-        .saturating_sub(visible_rows);
-    let rows = app
+        .saturating_sub(visible);
+    let items = app
         .history_sessions
         .iter()
         .enumerate()
         .skip(start)
-        .take(visible_rows)
+        .take(visible)
         .map(|(idx, session)| {
-            let style = if idx == app.selected_history {
+            let selected = idx == app.selected_history;
+            let style = if selected {
                 widgets::selected_style(app.theme)
             } else {
-                Style::default()
+                Style::default().fg(app.theme.text).bg(app.theme.surface)
             };
-            Row::new(vec![
-                Cell::from(Span::styled(
-                    session.profile.clone(),
-                    Style::default().fg(app.theme.text),
+            ListItem::new(vec![
+                Line::from(Span::styled(
+                    session.title.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Cell::from(history_time(session.updated_at)),
-                Cell::from(session.title.clone()),
-                Cell::from(
-                    session
-                        .cwd
-                        .as_deref()
-                        .map(short_home)
-                        .unwrap_or_else(|| "-".into()),
-                ),
-                Cell::from(Span::styled(
-                    session.session_id.clone(),
-                    Style::default().fg(app.theme.muted),
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        session.profile.clone(),
+                        Style::default().fg(app.theme.title),
+                    ),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(
+                        history_time(session.updated_at),
+                        Style::default().fg(app.theme.muted),
+                    ),
+                ]),
             ])
             .style(style)
         });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(24),
-            Constraint::Length(16),
-            Constraint::Min(28),
-            Constraint::Length(28),
-            Constraint::Length(20),
-        ],
-    )
-    .header(
-        Row::new(["Profile", "Updated", "Title", "CWD", "Session"])
-            .style(widgets::header_style(app.theme)),
-    )
-    .block(widgets::block(
-        if app.history_loading {
-            "Resume Sessions (loading...)"
-        } else {
-            "Resume Sessions"
-        },
-        app.theme,
-    ));
-    frame.render_widget(table, chunks[0]);
+    let title = if app.history_loading {
+        "Sessions (loading...)"
+    } else {
+        "Sessions"
+    };
     frame.render_widget(
-        widgets::help_bar(
-            &[
-                ("Move", &[("↑↓", "select"), ("j/k", "select")]),
-                (
-                    "Session",
-                    &[
-                        ("Enter", "resume"),
-                        ("c", "continue as"),
-                        ("r", "refresh"),
-                        ("b", "back"),
-                    ],
-                ),
-                ("System", &[("t", "theme"), ("q", "quit")]),
-            ],
-            app.theme,
-        ),
-        chunks[1],
+        List::new(items)
+            .block(widgets::block(title, app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
+        area,
+    );
+}
+
+fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let Some(session) = app.current_history_session() else {
+        frame.render_widget(
+            Paragraph::new("No session selected")
+                .block(widgets::block("Session Detail", app.theme))
+                .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
+            area,
+        );
+        return;
+    };
+    let updated = history_time(session.updated_at);
+    let cwd = session
+        .cwd
+        .as_deref()
+        .map(short_home)
+        .unwrap_or_else(|| "-".into());
+    let path = session
+        .path
+        .as_deref()
+        .map(short_home)
+        .unwrap_or_else(|| "-".into());
+    let lines = vec![
+        Line::from(Span::styled(
+            session.title,
+            Style::default()
+                .fg(app.theme.title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        detail_line(app, "Profile", session.profile),
+        detail_line(app, "Updated", updated),
+        detail_line(app, "CWD", cwd),
+        detail_line(app, "Session", session.session_id),
+        detail_line(app, "Path", path),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(app.theme.key_fg)
+                    .bg(app.theme.title)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" resume   ", Style::default().fg(app.theme.text)),
+            Span::styled(
+                "c",
+                Style::default()
+                    .fg(app.theme.key_fg)
+                    .bg(app.theme.action)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " continue with another profile",
+                Style::default().fg(app.theme.text),
+            ),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(widgets::block("Session Detail", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+            .wrap(Wrap { trim: false }),
+        area,
     );
 }
 
@@ -498,51 +593,124 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(58, 52, frame.area());
+    let area = centered_rect(64, 58, frame.area());
     frame.render_widget(Clear, area);
-    let visible_rows = usize::from(area.height.saturating_sub(4)).max(1);
+    let visible = usize::from(area.height.saturating_sub(3)).max(1);
     let start = app
         .selected_continue_profile
         .saturating_add(1)
-        .saturating_sub(visible_rows);
+        .saturating_sub(visible);
     let source = app
         .current_history_session()
         .map(|session| session.profile)
         .unwrap_or_default();
-    let items = app
+    let rows = app
         .profiles
         .iter()
         .enumerate()
         .skip(start)
-        .take(visible_rows)
+        .take(visible)
         .map(|(idx, profile)| {
             let marker = if profile.name == source {
-                " current session"
+                "current"
             } else if app.active_profile.as_deref() == Some(profile.name.as_str()) {
-                " active"
+                "active"
             } else {
                 ""
             };
             let style = if idx == app.selected_continue_profile {
                 widgets::selected_style(app.theme)
             } else {
-                Style::default().fg(app.theme.text).bg(app.theme.bg)
+                Style::default().fg(app.theme.text).bg(app.theme.panel)
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    profile.name.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(marker, Style::default().fg(app.theme.muted)),
-            ]))
+            Row::new(vec![
+                Cell::from(profile.name.clone()),
+                Cell::from(marker),
+                Cell::from(percent(profile.limit_5h_remaining)),
+                Cell::from(percent(profile.limit_7day_remaining)),
+                Cell::from(expiry(profile.plan_expires_at)),
+            ])
             .style(style)
         });
-    frame.render_widget(
-        List::new(items)
-            .block(widgets::block("Continue With Profile", app.theme))
-            .style(Style::default().fg(app.theme.text).bg(app.theme.bg)),
-        area,
-    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(18),
+            Constraint::Length(9),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(12),
+        ],
+    )
+    .header(
+        Row::new(["Profile", "State", "5h", "7day", "Expires"])
+            .style(widgets::header_style(app.theme)),
+    )
+    .block(widgets::block("Continue With Profile", app.theme))
+    .style(Style::default().fg(app.theme.text).bg(app.theme.panel));
+    frame.render_widget(table, area);
+}
+
+fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect, groups: &[(&str, &[(&str, &str)])]) {
+    frame.render_widget(widgets::help_bar(groups, app.theme), area);
+}
+
+fn detail_row(label: impl Into<String>, value: impl Into<String>) -> Row<'static> {
+    Row::new(vec![Cell::from(label.into()), Cell::from(value.into())])
+}
+
+fn detail_line(app: &App, label: &str, value: impl Into<String>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<10}"), Style::default().fg(app.theme.muted)),
+        Span::styled(value.into(), Style::default().fg(app.theme.text)),
+    ])
+}
+
+fn quota_color(app: &App, value: u8) -> ratatui::style::Color {
+    if value <= 10 {
+        app.theme.error
+    } else if value <= 30 {
+        app.theme.warn
+    } else {
+        app.theme.ok
+    }
+}
+
+fn bool_label(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn percent(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "-".into())
+}
+
+fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
+    value
+        .map(|value| value.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn history_time(timestamp: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
+        .map(chrono::DateTime::<chrono::Local>::from)
+        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn short_home(path: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_string();
+    };
+    let home = home.to_string_lossy();
+    path.strip_prefix(home.as_ref())
+        .map(|rest| format!("~{rest}"))
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn short_hash(hash: &str) -> &str {
@@ -566,19 +734,4 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-fn broken_symlinks(path: &std::path::Path) -> Vec<String> {
-    walkdir::WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| {
-            if crate::config::is_broken_symlink(e.path()) {
-                Some(e.path().display().to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
 }

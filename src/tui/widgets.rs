@@ -7,6 +7,8 @@ use ratatui::{
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     pub bg: Color,
+    pub surface: Color,
+    pub panel: Color,
     pub border: Color,
     pub title: Color,
     pub text: Color,
@@ -76,6 +78,8 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             bg: Color::Rgb(12, 16, 24),
+            surface: Color::Rgb(17, 24, 39),
+            panel: Color::Rgb(23, 31, 48),
             border: Color::Rgb(70, 87, 115),
             title: Color::Rgb(124, 209, 255),
             text: Color::Rgb(218, 226, 241),
@@ -94,6 +98,8 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             bg: Color::Rgb(248, 250, 252),
+            surface: Color::Rgb(241, 245, 249),
+            panel: Color::Rgb(255, 255, 255),
             border: Color::Rgb(148, 163, 184),
             title: Color::Rgb(3, 105, 161),
             text: Color::Rgb(15, 23, 42),
