@@ -5,7 +5,7 @@ use super::{
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io::{self, Write};
+use std::io;
 use std::time::Duration;
 
 pub fn run_loop(
@@ -56,6 +56,7 @@ fn handle_list(
         KeyCode::Char('i') => start_input(app, InputMode::ImportDefault),
         KeyCode::Char('2') => start_input(app, InputMode::ImportSub2),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
+        KeyCode::Char('a') => app.activate_current_profile()?,
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
         KeyCode::Char('e') => start_input(app, InputMode::ExecPrompt),
@@ -82,6 +83,7 @@ fn handle_detail(
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('a') => app.activate_current_profile()?,
         KeyCode::Char('l') => external(terminal, app, External::Login)?,
         KeyCode::Char('r') => external(terminal, app, External::Run)?,
         KeyCode::Char('e') => start_input(app, InputMode::ExecPrompt),
@@ -263,13 +265,12 @@ fn external(
         app.set_message("No profile selected");
         return Ok(());
     };
-    super::suspend_terminal(terminal)?;
-    let status = match action {
-        External::Login => crate::process::codex_login(&name)?,
-        External::Run => crate::process::codex_run(&name, &[])?,
-    };
-    wait_for_enter(status)?;
-    super::resume_terminal(terminal)?;
+    crate::activation::activate_profile(&name)?;
+    app.active_profile = Some(name.clone());
+    let _status = run_suspended(terminal, || match action {
+        External::Login => crate::process::codex_login(&name),
+        External::Run => crate::process::codex_run(&name, &[]),
+    })?;
     app.refresh_profiles()?;
     Ok(())
 }
@@ -283,10 +284,9 @@ fn external_with_prompt(
         return Ok(());
     };
     let prompt = app.input.clone();
-    super::suspend_terminal(terminal)?;
-    let status = crate::process::codex_exec(&name, &[prompt])?;
-    wait_for_enter(status)?;
-    super::resume_terminal(terminal)?;
+    crate::activation::activate_profile(&name)?;
+    app.active_profile = Some(name.clone());
+    let _status = run_suspended(terminal, || crate::process::codex_exec(&name, &[prompt]))?;
     app.refresh_profiles()?;
     Ok(())
 }
@@ -299,10 +299,11 @@ fn external_resume(
         app.set_message("No history session selected");
         return Ok(());
     };
-    super::suspend_terminal(terminal)?;
-    let status = crate::process::codex_resume(&session.profile, &session.session_id)?;
-    wait_for_enter(status)?;
-    super::resume_terminal(terminal)?;
+    crate::activation::activate_profile(&session.profile)?;
+    app.active_profile = Some(session.profile.clone());
+    let _status = run_suspended(terminal, || {
+        crate::process::codex_resume(&session.profile, &session.session_id)
+    })?;
     app.refresh_profiles()?;
     app.refresh_history_sessions()?;
     Ok(())
@@ -322,21 +323,26 @@ fn external_continue_with_profile(
         return Ok(());
     }
     crate::profile::ensure_exists(&target)?;
-    super::suspend_terminal(terminal)?;
-    let status = crate::process::codex_resume_copied_session(&session, &target)?;
-    wait_for_enter(status)?;
-    super::resume_terminal(terminal)?;
+    crate::activation::activate_profile(&target)?;
+    app.active_profile = Some(target.clone());
+    let _status = run_suspended(terminal, || {
+        crate::process::codex_resume_copied_session(&session, &target)
+    })?;
     app.refresh_profiles()?;
     app.refresh_history_sessions()?;
     Ok(())
 }
 
-fn wait_for_enter(status: i32) -> Result<()> {
-    println!();
-    println!("codex exited with status {status}.");
-    print!("Press Enter to return to CodexHub TUI...");
-    io::stdout().flush().ok();
-    let mut buf = String::new();
-    io::stdin().read_line(&mut buf)?;
-    Ok(())
+fn run_suspended(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    run: impl FnOnce() -> Result<i32>,
+) -> Result<i32> {
+    super::suspend_terminal(terminal)?;
+    let result = run();
+    let resume_result = super::resume_terminal(terminal);
+    match (result, resume_result) {
+        (Ok(status), Ok(())) => Ok(status),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(_), Err(err)) | (Err(_), Err(err)) => Err(err),
+    }
 }

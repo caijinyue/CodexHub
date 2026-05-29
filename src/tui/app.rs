@@ -8,6 +8,7 @@ pub struct App {
     pub screen: Screen,
     pub input_mode: InputMode,
     pub profiles: Vec<profile::ProfileInfo>,
+    pub active_profile: Option<String>,
     pub selected: usize,
     pub input: String,
     pub message: String,
@@ -24,10 +25,12 @@ impl App {
     pub fn new() -> Result<Self> {
         crate::config::init()?;
         let profiles = profile::list()?;
+        let active_profile = crate::activation::active_profile_name()?;
         let mut app = Self {
             screen: Screen::List,
             input_mode: InputMode::None,
             profiles,
+            active_profile,
             selected: 0,
             input: String::new(),
             message: String::new(),
@@ -45,6 +48,7 @@ impl App {
 
     pub fn refresh_profiles(&mut self) -> Result<()> {
         self.profiles = profile::list()?;
+        self.active_profile = crate::activation::active_profile_name()?;
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len().saturating_sub(1);
         }
@@ -155,6 +159,20 @@ impl App {
     pub fn set_message(&mut self, msg: impl Into<String>) {
         self.message = msg.into();
         self.input_mode = InputMode::Message;
+    }
+
+    pub fn activate_current_profile(&mut self) -> Result<()> {
+        let Some(name) = self.current_name() else {
+            self.set_message("No profile selected");
+            return Ok(());
+        };
+        let result = crate::activation::activate_profile(&name)?;
+        self.active_profile = Some(name.clone());
+        self.set_message(format!(
+            "Activated {name}\nCODEX_HOME={}\nRestart Codex Desktop if it is already running.",
+            result.profile_path.display()
+        ));
+        Ok(())
     }
 }
 

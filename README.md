@@ -27,6 +27,7 @@ cargo build --release
 codexhub init
 codexhub create personal
 codexhub login personal
+codexhub activate personal
 codexhub run personal
 ```
 
@@ -88,6 +89,8 @@ codexhub
 
 The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
 
+Press `a` from the profile list or detail screen to activate the selected profile as the current `CODEX_HOME` for tools launched outside CodexHub. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh`, `~/.codexhub/current_profile`, and a user environment file under `~/.config/environment.d/` when that location is available. On Linux and macOS it also best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
+
 Press `h` from the profile list to show resume sessions across all profiles. The history screen also loads in the background and supports scrolling through the merged session list. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
 
 If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, and enter the target profile name. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
@@ -148,7 +151,7 @@ For one-time migration from a sub2 JSON export, use `codexhub import-sub2 <json>
 
 ## Why No Rotation or Private Quota API
 
-CodexHub does not implement account rotation, automatic switching to avoid limits, manual refresh-token calls, or private API quota checks. It only starts the official Codex CLI with a selected `CODEX_HOME`.
+CodexHub does not implement account rotation, automatic switching to avoid limits, manual refresh-token calls, or private API quota checks. It starts the official Codex CLI with a selected `CODEX_HOME` and can explicitly activate one profile as the current user environment for other Codex clients.
 
 ## Difference From Auth Switchers
 
@@ -169,6 +172,7 @@ codexhub create <name> [--copy-config]
 codexhub import-default [name]
 codexhub import-sub2 <json> [name]
 codexhub login <name>
+codexhub activate <name>
 codexhub run <name> -- [codex args...]
 codexhub exec <name> -- [codex exec args...]
 codexhub shell <name>
@@ -195,7 +199,7 @@ CodexHub is split into narrow modules:
 - `shell`: interactive subshell with `CODEX_HOME`.
 - `tui`: ratatui/crossterm interface, input popups, doctor view, and external command handoff.
 
-The most important invariant is simple: CodexHub never becomes an auth manager. It manages isolated `CODEX_HOME` directories and delegates login, token refresh, and Codex behavior to the official CLI.
+The most important invariant is simple: CodexHub never becomes an auth manager. It manages isolated `CODEX_HOME` directories and delegates login, token refresh, and Codex behavior to the official CLI. Activating a profile changes which isolated home future Codex clients see; it does not copy or merge credentials.
 
 ## Import Existing `~/.codex`
 

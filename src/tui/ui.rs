@@ -61,9 +61,14 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         } else {
             Span::styled("no", Style::default().fg(widgets::MUTED))
         };
+        let name = if app.active_profile.as_deref() == Some(p.name.as_str()) {
+            format!("* {}", p.name)
+        } else {
+            p.name.clone()
+        };
         Row::new(vec![
             Cell::from(Span::styled(
-                p.name.clone(),
+                name,
                 Style::default()
                     .fg(widgets::TEXT)
                     .add_modifier(Modifier::BOLD),
@@ -81,10 +86,16 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         ])
         .style(style)
     });
-    let title = if app.status_loading {
-        "CodexHub Profiles (loading status...)"
+    let title = if let Some(active) = &app.active_profile {
+        if app.status_loading {
+            format!("CodexHub Profiles (active: {active}, loading status...)")
+        } else {
+            format!("CodexHub Profiles (active: {active})")
+        }
+    } else if app.status_loading {
+        "CodexHub Profiles (loading status...)".to_string()
     } else {
-        "CodexHub Profiles"
+        "CodexHub Profiles".to_string()
     };
     let table = Table::new(
         rows,
@@ -109,7 +120,7 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
         ])
         .style(widgets::header_style()),
     )
-    .block(widgets::block(title));
+    .block(widgets::block(&title));
     frame.render_widget(table, chunks[0]);
     frame.render_widget(
         widgets::help_bar(&[
@@ -124,7 +135,15 @@ fn draw_list(frame: &mut Frame<'_>, app: &App) {
                     ("d", "delete"),
                 ],
             ),
-            ("Codex", &[("l", "login"), ("r", "run"), ("e", "exec")]),
+            (
+                "Codex",
+                &[
+                    ("a", "activate"),
+                    ("l", "login"),
+                    ("r", "run"),
+                    ("e", "exec"),
+                ],
+            ),
             ("History", &[("h", "resume")]),
             ("Cache", &[("s", "share"), ("u", "unshare")]),
             ("System", &[("D", "doctor"), ("q", "quit")]),
@@ -160,9 +179,27 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
                     }
                 })
                 .unwrap_or_else(|| "-".into());
+            let active_env = crate::config::paths()
+                .map(|paths| paths.root.join("current.env").display().to_string())
+                .unwrap_or_else(|_| "-".into());
             vec![
                 format!("Profile Name: {}", p.name),
                 format!("Profile Path: {}", p.path.display()),
+                format!(
+                    "Active Profile: {}",
+                    if app.active_profile.as_deref() == Some(name.as_str()) {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                ),
+                format!(
+                    "Active Env: {}",
+                    app.active_profile
+                        .as_ref()
+                        .map(|_| active_env.as_str())
+                        .unwrap_or("-")
+                ),
                 format!("Auth Exists: {}", auth.exists()),
                 format!(
                     "Auth Mtime: {}",
@@ -215,7 +252,15 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         widgets::help_bar(&[
             ("Move", &[("b", "back")]),
-            ("Codex", &[("l", "login"), ("r", "run"), ("e", "exec")]),
+            (
+                "Codex",
+                &[
+                    ("a", "activate"),
+                    ("l", "login"),
+                    ("r", "run"),
+                    ("e", "exec"),
+                ],
+            ),
             ("Cache", &[("s", "share"), ("u", "unshare")]),
             ("System", &[("D", "doctor"), ("q", "quit")]),
         ]),

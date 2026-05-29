@@ -1,4 +1,4 @@
-use crate::{config, doctor, process, profile, shared, shell, size, tui};
+use crate::{activation, config, doctor, process, profile, shared, shell, size, tui};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
@@ -30,6 +30,9 @@ enum Commands {
         name: Option<String>,
     },
     Login {
+        name: String,
+    },
+    Activate {
         name: String,
     },
     Run {
@@ -88,10 +91,32 @@ pub fn run() -> Result<()> {
             let (name, path) = profile::import_sub2_json(&json, name.as_deref())?;
             println!("Imported sub2 JSON as profile {name}: {}", path.display());
         }
-        Commands::Login { name } => std::process::exit(process::codex_login(&name)?),
-        Commands::Run { name, args } => std::process::exit(process::codex_run(&name, &args)?),
-        Commands::Exec { name, args } => std::process::exit(process::codex_exec(&name, &args)?),
-        Commands::Shell { name } => std::process::exit(shell::open(&name)?),
+        Commands::Login { name } => {
+            activation::activate_profile(&name)?;
+            std::process::exit(process::codex_login(&name)?)
+        }
+        Commands::Activate { name } => {
+            let result = activation::activate_profile(&name)?;
+            println!("Activated profile {name}");
+            println!("CODEX_HOME={}", result.profile_path.display());
+            println!("Shell env: source {}", result.shell_file.display());
+            if let Some(file) = result.environment_d_file {
+                println!("User environment file: {}", file.display());
+            }
+            println!("Restart Codex Desktop if it is already running.");
+        }
+        Commands::Run { name, args } => {
+            activation::activate_profile(&name)?;
+            std::process::exit(process::codex_run(&name, &args)?)
+        }
+        Commands::Exec { name, args } => {
+            activation::activate_profile(&name)?;
+            std::process::exit(process::codex_exec(&name, &args)?)
+        }
+        Commands::Shell { name } => {
+            activation::activate_profile(&name)?;
+            std::process::exit(shell::open(&name)?)
+        }
         Commands::Path { name } => println!("{}", profile::profile_path(&name)?.display()),
         Commands::List => print_list()?,
         Commands::Doctor { allow_auth_symlink } => print_doctor(allow_auth_symlink)?,

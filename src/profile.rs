@@ -525,14 +525,11 @@ fn email_like(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn imports_sub2_json_as_isolated_codex_profile() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -590,7 +587,7 @@ mod tests {
 
     #[test]
     fn imports_sub2_json_with_explicit_name_without_email() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -655,7 +652,7 @@ mod tests {
 
     #[test]
     fn copies_session_file_and_index_to_target_profile() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
