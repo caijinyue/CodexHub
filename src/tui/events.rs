@@ -119,7 +119,7 @@ fn handle_history(
         KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,
-        KeyCode::Char('c') => start_input(app, InputMode::ContinueProfile),
+        KeyCode::Char('c') => start_continue_profile_select(app),
         KeyCode::Enter => external_resume(terminal, app)?,
         _ => {}
     }
@@ -134,9 +134,25 @@ fn handle_input(
     match key.code {
         KeyCode::Esc => {
             app.input.clear();
+            if app.input_mode == InputMode::UpdatePrompt {
+                app.update_info = None;
+            }
             app.input_mode = InputMode::None;
         }
         KeyCode::Enter => submit_input(terminal, app)?,
+        KeyCode::Down | KeyCode::Char('j') if app.input_mode == InputMode::ContinueProfile => {
+            app.move_continue_profile_down();
+        }
+        KeyCode::Up | KeyCode::Char('k') if app.input_mode == InputMode::ContinueProfile => {
+            app.move_continue_profile_up();
+        }
+        KeyCode::Char('y') if app.input_mode == InputMode::UpdatePrompt => {
+            install_update(terminal, app)?;
+        }
+        KeyCode::Char('n') if app.input_mode == InputMode::UpdatePrompt => {
+            app.update_info = None;
+            app.input_mode = InputMode::None;
+        }
         KeyCode::Backspace => {
             app.input.pop();
         }
@@ -148,7 +164,6 @@ fn handle_input(
                     | InputMode::ImportDefault
                     | InputMode::ImportSub2
                     | InputMode::DeleteConfirm
-                    | InputMode::ContinueProfile
                     | InputMode::ExecPrompt
             ) {
                 app.input.push(ch);
@@ -201,7 +216,7 @@ fn submit_input(
             app.input.clear();
         }
         InputMode::ContinueProfile => {
-            external_continue_with_profile(terminal, app)?;
+            external_continue_with_selected_profile(terminal, app)?;
             app.input_mode = InputMode::None;
             app.input.clear();
         }
@@ -220,6 +235,9 @@ fn submit_input(
             crate::shared::unshare_cache(&name, false, true)?;
             app.refresh_profiles()?;
             app.set_message(format!("Shared cache disabled for {name}"));
+        }
+        InputMode::UpdatePrompt => {
+            install_update(terminal, app)?;
         }
         InputMode::Message => {
             app.input_mode = InputMode::None;
@@ -249,6 +267,23 @@ fn start_input(app: &mut App, mode: InputMode) {
     } else {
         app.input_mode = mode;
     }
+}
+
+fn start_continue_profile_select(app: &mut App) {
+    if app.profiles.is_empty() {
+        app.set_message("No profile available");
+        return;
+    }
+    let selected = app
+        .current_history_session()
+        .and_then(|session| {
+            app.profiles
+                .iter()
+                .position(|profile| profile.name != session.profile)
+        })
+        .unwrap_or(0);
+    app.selected_continue_profile = selected;
+    app.input_mode = InputMode::ContinueProfile;
 }
 
 enum External {
@@ -309,7 +344,7 @@ fn external_resume(
     Ok(())
 }
 
-fn external_continue_with_profile(
+fn external_continue_with_selected_profile(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
@@ -317,11 +352,10 @@ fn external_continue_with_profile(
         app.set_message("No history session selected");
         return Ok(());
     };
-    let target = app.input.trim().to_string();
-    if target.is_empty() {
-        app.set_message("Target profile name is required");
+    let Some(target) = app.current_continue_profile_name() else {
+        app.set_message("No target profile selected");
         return Ok(());
-    }
+    };
     crate::profile::ensure_exists(&target)?;
     crate::activation::activate_profile(&target)?;
     app.active_profile = Some(target.clone());
@@ -330,6 +364,27 @@ fn external_continue_with_profile(
     })?;
     app.refresh_profiles()?;
     app.refresh_history_sessions()?;
+    Ok(())
+}
+
+fn install_update(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    let Some(info) = app.update_info.clone() else {
+        app.input_mode = InputMode::None;
+        return Ok(());
+    };
+    let result = run_suspended(terminal, || {
+        crate::update::install_update(&info.repo_path)?;
+        Ok(0)
+    });
+    app.update_info = None;
+    app.input_mode = InputMode::None;
+    match result {
+        Ok(_) => app.set_message("Update installed. Restart CodexHub to use the new binary."),
+        Err(err) => app.set_message(format!("Update failed: {err}")),
+    }
     Ok(())
 }
 

@@ -8,6 +8,7 @@ mod shared;
 mod shell;
 mod size;
 mod tui;
+mod update;
 
 #[cfg(test)]
 mod test_support {

@@ -2,6 +2,7 @@ use crate::{config, profile};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,6 +36,7 @@ pub fn run(allow_auth_symlink: bool) -> Result<Vec<Check>> {
     let mut checks = Vec::new();
     checks.extend(check_codex());
     let profiles = profile::list()?;
+    #[cfg(unix)]
     let mut auth_inodes: HashMap<(u64, u64), String> = HashMap::new();
     let mut auth_realpaths: HashMap<PathBuf, String> = HashMap::new();
     let mut sensitive_realpaths: HashMap<PathBuf, (String, String)> = HashMap::new();
@@ -83,17 +85,20 @@ pub fn run(allow_auth_symlink: bool) -> Result<Vec<Check>> {
                     checks.push(ok(&name, "auth.json is not a symlink"));
                 }
             }
-            if let Ok(meta) = fs::metadata(&auth) {
-                let key = (meta.dev(), meta.ino());
-                if let Some(other) = auth_inodes.insert(key, name.clone()) {
-                    checks.push(error(
-                        "security",
-                        format!(
-                            "profiles \"{other}\" and \"{name}\" share the same auth.json inode"
-                        ),
-                    ));
-                } else {
-                    checks.push(ok(&name, format!("auth.json inode {}", meta.ino())));
+            #[cfg(unix)]
+            {
+                if let Ok(meta) = fs::metadata(&auth) {
+                    let key = (meta.dev(), meta.ino());
+                    if let Some(other) = auth_inodes.insert(key, name.clone()) {
+                        checks.push(error(
+                            "security",
+                            format!(
+                                "profiles \"{other}\" and \"{name}\" share the same auth.json inode"
+                            ),
+                        ));
+                    } else {
+                        checks.push(ok(&name, format!("auth.json inode {}", meta.ino())));
+                    }
                 }
             }
             if let Ok(real) = fs::canonicalize(&auth) {

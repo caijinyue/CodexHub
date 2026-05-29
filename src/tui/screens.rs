@@ -17,5 +17,6 @@ pub enum InputMode {
     ExecPrompt,
     ShareConfirm,
     UnshareConfirm,
+    UpdatePrompt,
     Message,
 }

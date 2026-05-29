@@ -1,6 +1,6 @@
 # CodexHub
 
-CodexHub is a multi `CODEX_HOME` profile manager for the OpenAI Codex CLI. It is not an `auth.json` switcher, not an account pool, and not a quota bypass tool.
+CodexHub is a cross-platform multi `CODEX_HOME` profile manager for the OpenAI Codex CLI on Linux, macOS, and Windows. It is not an `auth.json` switcher, not an account pool, and not a quota bypass tool.
 
 Codex CLI stores local state under `~/.codex` by default. It also supports `CODEX_HOME=/some/path codex`, which lets each account run with a physically separate home directory. CodexHub uses that supported boundary:
 
@@ -89,15 +89,17 @@ codexhub
 
 The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
 
-Press `a` from the profile list or detail screen to activate the selected profile as the current `CODEX_HOME` for tools launched outside CodexHub. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh`, `~/.codexhub/current_profile`, and a user environment file under `~/.config/environment.d/` when that location is available. On Linux and macOS it also best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
+Press `a` from the profile list or detail screen to activate the selected profile as the current `CODEX_HOME` for tools launched outside CodexHub. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh` on Linux/macOS or `activate.ps1` on Windows, and `~/.codexhub/current_profile`. On Linux it also writes a user environment file under `~/.config/environment.d/`; on Linux/macOS/Windows it best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
+
+CodexHub checks GitHub for updates in the background when the TUI starts. If the remote repository has a newer commit, it shows an update prompt. Press `Enter` or `y` to run `git pull --ff-only` and `cargo install --path .`, or press `n`/`Esc` to skip.
 
 Press `h` from the profile list to show resume sessions across all profiles. The history screen also loads in the background and supports scrolling through the merged session list. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
 
-If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, and enter the target profile name. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
+If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, choose the target profile from the popup list, and press `Enter`. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
 
 ## Shared Cache
 
-Only low-risk cache-like paths can be shared, and sharing is implemented with symlinks into `~/.codexhub/shared`:
+Only low-risk cache-like paths can be shared, and sharing is implemented with symlinks into `~/.codexhub/shared`. On Windows, creating symlinks may require Developer Mode or appropriate privileges.
 
 ```bash
 codexhub share-cache work

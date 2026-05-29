@@ -1,5 +1,5 @@
 use super::screens::{InputMode, Screen};
-use crate::{doctor, process, profile};
+use crate::{doctor, process, profile, update};
 use anyhow::Result;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -15,10 +15,14 @@ pub struct App {
     pub doctor_checks: Vec<doctor::Check>,
     pub history_sessions: Vec<process::HistorySession>,
     pub selected_history: usize,
+    pub selected_continue_profile: usize,
+    pub update_info: Option<update::UpdateInfo>,
     pub status_loading: bool,
     pub history_loading: bool,
+    pub update_checking: bool,
     status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
     history_rx: Option<Receiver<Vec<process::HistorySession>>>,
+    update_rx: Option<Receiver<Option<update::UpdateInfo>>>,
 }
 
 impl App {
@@ -37,12 +41,17 @@ impl App {
             doctor_checks: Vec::new(),
             history_sessions: Vec::new(),
             selected_history: 0,
+            selected_continue_profile: 0,
+            update_info: None,
             status_loading: false,
             history_loading: false,
+            update_checking: false,
             status_rx: None,
             history_rx: None,
+            update_rx: None,
         };
         app.start_status_refresh();
+        app.start_update_check();
         Ok(app)
     }
 
@@ -85,6 +94,23 @@ impl App {
         self.history_sessions.get(self.selected_history).cloned()
     }
 
+    pub fn current_continue_profile_name(&self) -> Option<String> {
+        self.profiles
+            .get(self.selected_continue_profile)
+            .map(|profile| profile.name.clone())
+    }
+
+    pub fn move_continue_profile_down(&mut self) {
+        if !self.profiles.is_empty() {
+            self.selected_continue_profile =
+                (self.selected_continue_profile + 1).min(self.profiles.len() - 1);
+        }
+    }
+
+    pub fn move_continue_profile_up(&mut self) {
+        self.selected_continue_profile = self.selected_continue_profile.saturating_sub(1);
+    }
+
     pub fn refresh_history_sessions(&mut self) -> Result<()> {
         self.start_history_refresh();
         Ok(())
@@ -122,6 +148,19 @@ impl App {
                 Err(mpsc::TryRecvError::Disconnected) => self.history_loading = false,
             }
         }
+        if let Some(rx) = self.update_rx.take() {
+            match rx.try_recv() {
+                Ok(info) => {
+                    self.update_checking = false;
+                    self.update_info = info;
+                }
+                Err(mpsc::TryRecvError::Empty) => self.update_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => self.update_checking = false,
+            }
+        }
+        if self.update_info.is_some() && self.input_mode == InputMode::None {
+            self.input_mode = InputMode::UpdatePrompt;
+        }
     }
 
     pub fn start_status_refresh(&mut self) {
@@ -153,6 +192,19 @@ impl App {
         thread::spawn(move || {
             let sessions = all_history_sessions(names);
             let _ = tx.send(sessions);
+        });
+    }
+
+    pub fn start_update_check(&mut self) {
+        if self.update_checking {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.update_checking = true;
+        self.update_rx = Some(rx);
+        thread::spawn(move || {
+            let info = update::check_for_update().ok().flatten();
+            let _ = tx.send(info);
         });
     }
 

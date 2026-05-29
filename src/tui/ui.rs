@@ -165,20 +165,16 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App) {
         Ok(p) => {
             let auth = p.path.join("auth.json");
             let auth_meta = std::fs::symlink_metadata(&auth).ok();
+            #[cfg(unix)]
             let auth_inode = std::fs::metadata(&auth)
                 .ok()
                 .map(|m| {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::MetadataExt;
-                        m.ino().to_string()
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        "-".to_string()
-                    }
+                    use std::os::unix::fs::MetadataExt;
+                    m.ino().to_string()
                 })
                 .unwrap_or_else(|| "-".into());
+            #[cfg(not(unix))]
+            let auth_inode = "-".to_string();
             let active_env = crate::config::paths()
                 .map(|paths| paths.root.join("current.env").display().to_string())
                 .unwrap_or_else(|_| "-".into());
@@ -413,6 +409,11 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn draw_popup(frame: &mut Frame<'_>, app: &App) {
+    if app.input_mode == InputMode::ContinueProfile {
+        draw_continue_profile_popup(frame, app);
+        return;
+    }
+
     let area = centered_rect(70, 30, frame.area());
     frame.render_widget(Clear, area);
     let (title, body) = match app.input_mode {
@@ -438,13 +439,7 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 format!("Type \"{expected}\" to confirm:\n{}", app.input),
             )
         }
-        InputMode::ContinueProfile => (
-            "Continue With Profile",
-            format!(
-                "Target profile name: {}\nCopies the selected session into that profile, then runs codex resume.",
-                app.input
-            ),
-        ),
+        InputMode::ContinueProfile => return,
         InputMode::ExecPrompt => ("Codex Exec", format!("Prompt: {}", app.input)),
         InputMode::ShareConfirm => (
             "Share Cache",
@@ -454,6 +449,20 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
             "Unshare Cache",
             "Press Enter to confirm, Esc to cancel".into(),
         ),
+        InputMode::UpdatePrompt => {
+            let body = app
+                .update_info
+                .as_ref()
+                .map(|info| {
+                    format!(
+                        "A CodexHub update is available.\n\nLocal:  {}\nRemote: {}\n\nPress Enter or y to update, n or Esc to skip.",
+                        short_hash(&info.local_head),
+                        short_hash(&info.remote_head)
+                    )
+                })
+                .unwrap_or_else(|| "No update information available.".into());
+            ("Update Available", body)
+        }
         InputMode::Message => ("Message", app.message.clone()),
         InputMode::None => return,
     };
@@ -465,6 +474,58 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect(58, 52, frame.area());
+    frame.render_widget(Clear, area);
+    let visible_rows = usize::from(area.height.saturating_sub(4)).max(1);
+    let start = app
+        .selected_continue_profile
+        .saturating_add(1)
+        .saturating_sub(visible_rows);
+    let source = app
+        .current_history_session()
+        .map(|session| session.profile)
+        .unwrap_or_default();
+    let items = app
+        .profiles
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible_rows)
+        .map(|(idx, profile)| {
+            let marker = if profile.name == source {
+                " current session"
+            } else if app.active_profile.as_deref() == Some(profile.name.as_str()) {
+                " active"
+            } else {
+                ""
+            };
+            let style = if idx == app.selected_continue_profile {
+                widgets::selected_style()
+            } else {
+                Style::default().fg(widgets::TEXT).bg(widgets::BG)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    profile.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(marker, Style::default().fg(widgets::MUTED)),
+            ]))
+            .style(style)
+        });
+    frame.render_widget(
+        List::new(items)
+            .block(widgets::block("Continue With Profile"))
+            .style(Style::default().fg(widgets::TEXT).bg(widgets::BG)),
+        area,
+    );
+}
+
+fn short_hash(hash: &str) -> &str {
+    hash.get(..8).unwrap_or(hash)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

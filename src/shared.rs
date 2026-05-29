@@ -19,6 +19,15 @@ fn symlink_path(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
 
+#[cfg(windows)]
+fn symlink_path(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::os::windows::fs::symlink_dir(src, dst)
+    } else {
+        std::os::windows::fs::symlink_file(src, dst)
+    }
+}
+
 pub fn share_cache(name: &str) -> Result<()> {
     let paths = config::init()?;
     let profile = profile::ensure_exists(name)?;

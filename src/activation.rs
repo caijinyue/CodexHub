@@ -39,7 +39,7 @@ fn activate_profile_impl(name: &str, publish: bool) -> Result<ActivationResult> 
     let current_profile_file = paths.root.join("current_profile");
     let current_link = paths.root.join("current");
     let env_file = paths.root.join("current.env");
-    let shell_file = paths.root.join("activate.sh");
+    let shell_file = shell_file(&paths.root);
     let environment_d_file = environment_d_file();
 
     fs::write(&current_profile_file, format!("{name}\n"))
@@ -82,6 +82,17 @@ fn write_env_file(path: &Path, name: &str, profile_path: &Path) -> Result<()> {
     .with_context(|| format!("Writing {}", path.display()))
 }
 
+#[cfg(not(windows))]
+fn shell_file(root: &Path) -> PathBuf {
+    root.join("activate.sh")
+}
+
+#[cfg(windows)]
+fn shell_file(root: &Path) -> PathBuf {
+    root.join("activate.ps1")
+}
+
+#[cfg(not(windows))]
 fn write_shell_file(path: &Path, name: &str, profile_path: &Path) -> Result<()> {
     fs::write(
         path,
@@ -96,12 +107,39 @@ fn write_shell_file(path: &Path, name: &str, profile_path: &Path) -> Result<()> 
     Ok(())
 }
 
+#[cfg(windows)]
+fn write_shell_file(path: &Path, name: &str, profile_path: &Path) -> Result<()> {
+    fs::write(
+        path,
+        format!(
+            "$env:CODEX_HOME = \"{}\"\n$env:CODEXHUB_PROFILE = \"{}\"\n",
+            powershell_escape(&profile_path.to_string_lossy()),
+            powershell_escape(name)
+        ),
+    )
+    .with_context(|| format!("Writing {}", path.display()))?;
+    secure_executable(path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[cfg(windows)]
+fn powershell_escape(value: &str) -> String {
+    value.replace('`', "``").replace('"', "`\"")
+}
+
+#[cfg(not(windows))]
 fn environment_d_file() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("environment.d").join("10-codexhub.conf"))
+}
+
+#[cfg(windows)]
+fn environment_d_file() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(unix)]
@@ -174,7 +212,21 @@ fn publish_user_environment(name: &str, profile_path: &Path) {
             .status();
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        let _ = Command::new("setx")
+            .args(["CODEX_HOME", &profile_path.to_string_lossy()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = Command::new("setx")
+            .args(["CODEXHUB_PROFILE", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (name, profile_path);
     }

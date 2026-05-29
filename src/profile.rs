@@ -309,6 +309,15 @@ fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
 }
 
+#[cfg(windows)]
+fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        std::os::windows::fs::symlink_dir(source, target)
+    } else {
+        std::os::windows::fs::symlink_file(source, target)
+    }
+}
+
 pub fn ensure_exists(name: &str) -> Result<PathBuf> {
     let path = profile_path(name)?;
     if !path.is_dir() {

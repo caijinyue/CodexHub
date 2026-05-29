@@ -88,8 +88,8 @@ pub fn codex_history_sessions(name: &str, limit: usize) -> Result<Vec<HistorySes
 
 fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<String> {
     let home = profile::ensure_exists(name)?;
-    let mut child = Command::new("timeout")
-        .args(["12", "codex", "app-server", "--listen", "stdio://"])
+    let mut child = Command::new("codex")
+        .args(["app-server", "--listen", "stdio://"])
         .env("CODEX_HOME", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -106,6 +106,7 @@ fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<Stri
     writeln!(stdin, "{request}")?;
     thread::sleep(Duration::from_secs(if request_id == 2 { 4 } else { 3 }));
     drop(stdin);
+    let _ = child.kill();
 
     let out = child
         .wait_with_output()
