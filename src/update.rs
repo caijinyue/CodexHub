@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -6,37 +7,53 @@ use std::process::{Command, Stdio};
 pub enum UpdateState {
     Current,
     Available,
+    NotFastForward,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateInfo {
     pub local_head: String,
     pub remote_head: String,
+    pub remote_ref: String,
     pub repo_path: PathBuf,
 }
 
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
     let repo_path = repo_path();
     let local_head = git_output(&repo_path, &["rev-parse", "HEAD"])?;
-    let remote_output = git_output(&repo_path, &["ls-remote", "origin", "HEAD"])?;
-    let remote_head = parse_ls_remote_head(&remote_output).context("Parsing remote HEAD")?;
-    Ok(
-        (classify_heads(&local_head, &remote_head) == UpdateState::Available).then_some(
-            UpdateInfo {
-                local_head,
-                remote_head,
-                repo_path,
-            },
-        ),
-    )
+    let remote_ref = update_remote_ref(&repo_path)?;
+    let refspec = format!(
+        "+refs/heads/{}:refs/remotes/{}/{}",
+        remote_ref.branch, remote_ref.remote, remote_ref.branch
+    );
+
+    run_git_quiet(
+        &repo_path,
+        &["fetch", "--quiet", &remote_ref.remote, &refspec],
+    )?;
+
+    let remote_head = git_output(&repo_path, &["rev-parse", &remote_ref.local_ref])?;
+    let state = classify_heads(
+        &local_head,
+        &remote_head,
+        is_ancestor(&repo_path, &local_head, &remote_head)?,
+    );
+
+    Ok((state == UpdateState::Available).then_some(UpdateInfo {
+        local_head,
+        remote_head,
+        remote_ref: remote_ref.display,
+        repo_path,
+    }))
 }
 
 pub fn install_update(repo_path: &Path) -> Result<()> {
     run_git(repo_path, &["pull", "--ff-only"])?;
     run_command(
-        Command::new("cargo")
+        cargo_command()
             .args(["install", "--path"])
             .arg(repo_path)
+            .arg("--locked")
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit()),
     )
@@ -64,6 +81,15 @@ fn git_output(repo_path: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn git_status(repo_path: &Path, args: &[&str]) -> Result<std::process::ExitStatus> {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .status()
+        .with_context(|| format!("Running git {}", args.join(" ")))
+}
+
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<()> {
     run_command(
         Command::new("git")
@@ -76,6 +102,23 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<()> {
     .with_context(|| format!("Running git {}", args.join(" ")))
 }
 
+fn run_git_quiet(repo_path: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .output()
+        .with_context(|| format!("Running git {}", args.join(" ")))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 fn run_command(command: &mut Command) -> Result<()> {
     let status = command.status().context("Starting command")?;
     if !status.success() {
@@ -84,19 +127,79 @@ fn run_command(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn parse_ls_remote_head(output: &str) -> Option<String> {
-    output
-        .lines()
-        .find_map(|line| line.split_once(char::is_whitespace).map(|(head, _)| head))
-        .filter(|head| !head.is_empty())
-        .map(str::to_string)
+fn cargo_command() -> Command {
+    if let Ok(cargo) = env::var("CARGO") {
+        if !cargo.trim().is_empty() {
+            return Command::new(cargo);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let rustup_cargo = home.join(".cargo/bin/cargo");
+        if rustup_cargo.exists() {
+            return Command::new(rustup_cargo);
+        }
+    }
+    Command::new("cargo")
 }
 
-fn classify_heads(local: &str, remote: &str) -> UpdateState {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteRef {
+    remote: String,
+    branch: String,
+    display: String,
+    local_ref: String,
+}
+
+fn update_remote_ref(repo_path: &Path) -> Result<RemoteRef> {
+    let upstream = git_output(
+        repo_path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .filter(|value| !value.is_empty());
+
+    let display = match upstream {
+        Some(upstream) => upstream,
+        None => {
+            let branch = git_output(repo_path, &["branch", "--show-current"])?;
+            if branch.is_empty() {
+                anyhow::bail!("Cannot check updates from a detached HEAD without an upstream");
+            }
+            format!("origin/{branch}")
+        }
+    };
+    parse_remote_ref(&display).with_context(|| format!("Parsing upstream ref {display}"))
+}
+
+fn parse_remote_ref(value: &str) -> Result<RemoteRef> {
+    let (remote, branch) = value
+        .split_once('/')
+        .filter(|(remote, branch)| !remote.is_empty() && !branch.is_empty())
+        .context("Expected remote/branch")?;
+    Ok(RemoteRef {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+        display: value.to_string(),
+        local_ref: format!("refs/remotes/{remote}/{branch}"),
+    })
+}
+
+fn is_ancestor(repo_path: &Path, local: &str, remote: &str) -> Result<bool> {
+    let status = git_status(repo_path, &["merge-base", "--is-ancestor", local, remote])?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => anyhow::bail!("git merge-base --is-ancestor exited with status {status}"),
+    }
+}
+
+fn classify_heads(local: &str, remote: &str, local_is_ancestor_of_remote: bool) -> UpdateState {
     if local.trim() == remote.trim() {
         UpdateState::Current
-    } else {
+    } else if local_is_ancestor_of_remote {
         UpdateState::Available
+    } else {
+        UpdateState::NotFastForward
     }
 }
 
@@ -105,18 +208,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_ls_remote_head_line() {
-        let line = "70373e921f91f1ae899f0f3a695d313050f460d9\tHEAD\n";
+    fn parses_remote_ref() {
+        let remote_ref = parse_remote_ref("origin/main").unwrap();
 
-        assert_eq!(
-            parse_ls_remote_head(line),
-            Some("70373e921f91f1ae899f0f3a695d313050f460d9".to_string())
-        );
+        assert_eq!(remote_ref.remote, "origin");
+        assert_eq!(remote_ref.branch, "main");
+        assert_eq!(remote_ref.display, "origin/main");
+        assert_eq!(remote_ref.local_ref, "refs/remotes/origin/main");
+    }
+
+    #[test]
+    fn parses_remote_ref_with_slash_branch() {
+        let remote_ref = parse_remote_ref("origin/release/next").unwrap();
+
+        assert_eq!(remote_ref.remote, "origin");
+        assert_eq!(remote_ref.branch, "release/next");
+        assert_eq!(remote_ref.local_ref, "refs/remotes/origin/release/next");
     }
 
     #[test]
     fn classifies_update_state() {
-        assert_eq!(classify_heads("abc", "abc"), UpdateState::Current);
-        assert_eq!(classify_heads("abc", "def"), UpdateState::Available);
+        assert_eq!(classify_heads("abc", "abc", false), UpdateState::Current);
+        assert_eq!(classify_heads("abc", "def", true), UpdateState::Available);
+        assert_eq!(
+            classify_heads("abc", "def", false),
+            UpdateState::NotFastForward
+        );
     }
 }

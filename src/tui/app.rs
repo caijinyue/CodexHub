@@ -25,6 +25,7 @@ pub struct App {
     pub selected_continue_profile: usize,
     pub pending_login_method: Option<process::LoginMethod>,
     pub update_info: Option<update::UpdateInfo>,
+    pub update_error: Option<String>,
     pub status_loading: bool,
     pub history_loading: bool,
     pub update_checking: bool,
@@ -32,7 +33,7 @@ pub struct App {
     pub theme_preference: ThemePreference,
     status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
     history_rx: Option<Receiver<Vec<process::HistorySession>>>,
-    update_rx: Option<Receiver<Option<update::UpdateInfo>>>,
+    update_rx: Option<Receiver<Result<Option<update::UpdateInfo>, String>>>,
 }
 
 impl App {
@@ -58,6 +59,7 @@ impl App {
             selected_continue_profile: 0,
             pending_login_method: None,
             update_info: None,
+            update_error: None,
             status_loading: false,
             history_loading: false,
             update_checking: false,
@@ -79,6 +81,7 @@ impl App {
             self.selected = self.profiles.len().saturating_sub(1);
         }
         self.start_status_refresh();
+        self.start_update_check();
         Ok(())
     }
 
@@ -178,12 +181,21 @@ impl App {
         }
         if let Some(rx) = self.update_rx.take() {
             match rx.try_recv() {
-                Ok(info) => {
+                Ok(Ok(info)) => {
                     self.update_checking = false;
+                    self.update_error = None;
                     self.update_info = info;
                 }
+                Ok(Err(err)) => {
+                    self.update_checking = false;
+                    self.update_info = None;
+                    self.update_error = Some(err);
+                }
                 Err(mpsc::TryRecvError::Empty) => self.update_rx = Some(rx),
-                Err(mpsc::TryRecvError::Disconnected) => self.update_checking = false,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.update_checking = false;
+                    self.update_error = Some("Update check stopped before it finished".into());
+                }
             }
         }
         if self.update_info.is_some() && self.input_mode == InputMode::None {
@@ -240,9 +252,10 @@ impl App {
         }
         let (tx, rx) = mpsc::channel();
         self.update_checking = true;
+        self.update_error = None;
         self.update_rx = Some(rx);
         thread::spawn(move || {
-            let info = update::check_for_update().ok().flatten();
+            let info = update::check_for_update().map_err(|err| err.to_string());
             let _ = tx.send(info);
         });
     }

@@ -92,6 +92,10 @@ fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Span::styled("Theme  ", Style::default().fg(app.theme.muted)),
             Span::styled(app.theme_label(), Style::default().fg(app.theme.text)),
         ]),
+        Line::from(vec![
+            Span::styled("Update ", Style::default().fg(app.theme.muted)),
+            update_status_span(app),
+        ]),
     ];
     frame.render_widget(
         Paragraph::new(summary)
@@ -297,6 +301,7 @@ fn draw_profile_details(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo,
         detail_row("Logs", size::human(profile.logs_size)),
         detail_row("Total", size::human(profile.total_size)),
         detail_row("Shared cache", bool_label(profile.shared_cache)),
+        detail_row("Update check", update_detail_status(app)),
         detail_row(
             "Auth updated",
             profile
@@ -573,7 +578,8 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 .as_ref()
                 .map(|info| {
                     format!(
-                        "A CodexHub update is available.\n\nLocal:  {}\nRemote: {}\n\nPress Enter or y to update, n or Esc to skip.",
+                        "A CodexHub update is available.\n\nTrack:  {}\nLocal:  {}\nRemote: {}\n\nPress Enter or y to update, n or Esc to skip.",
+                        info.remote_ref,
                         short_hash(&info.local_head),
                         short_hash(&info.remote_head)
                     )
@@ -655,6 +661,35 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
 
 fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect, groups: &[(&str, &[(&str, &str)])]) {
     frame.render_widget(widgets::help_bar(groups, app.theme), area);
+}
+
+fn update_status_span(app: &App) -> Span<'static> {
+    if app.update_checking {
+        Span::styled("checking...", Style::default().fg(app.theme.muted))
+    } else if app.update_info.is_some() {
+        Span::styled("available", Style::default().fg(app.theme.action))
+    } else if app.update_error.is_some() {
+        Span::styled("check failed", Style::default().fg(app.theme.warn))
+    } else {
+        Span::styled("current", Style::default().fg(app.theme.ok))
+    }
+}
+
+fn update_detail_status(app: &App) -> String {
+    if app.update_checking {
+        "checking...".into()
+    } else if let Some(info) = &app.update_info {
+        format!(
+            "available on {} ({} -> {})",
+            info.remote_ref,
+            short_hash(&info.local_head),
+            short_hash(&info.remote_head)
+        )
+    } else if let Some(error) = &app.update_error {
+        format!("failed: {error}")
+    } else {
+        "current".into()
+    }
 }
 
 fn detail_row(label: impl Into<String>, value: impl Into<String>) -> Row<'static> {
