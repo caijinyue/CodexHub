@@ -132,7 +132,7 @@ pub fn session_preview_messages(session: &HistorySession, max_lines: usize) -> V
     let mut messages = Vec::new();
     for line in reader.lines().map_while(Result::ok) {
         if let Some(message) = preview_line(&line) {
-            messages.push(message);
+            push_preview_message(&mut messages, message);
         }
     }
     let mut out = Vec::new();
@@ -335,6 +335,11 @@ fn preview_line(line: &str) -> Option<PreviewMessage> {
 }
 
 fn event_message_preview(value: &Value) -> Option<PreviewMessage> {
+    let role = match value.pointer("/payload/type").and_then(Value::as_str)? {
+        "user_message" => PreviewRole::User,
+        "agent_message" => PreviewRole::Assistant,
+        _ => return None,
+    };
     let message = value
         .pointer("/payload/message")
         .and_then(Value::as_str)
@@ -343,7 +348,7 @@ fn event_message_preview(value: &Value) -> Option<PreviewMessage> {
         None
     } else {
         Some(PreviewMessage {
-            role: PreviewRole::User,
+            role,
             text: message,
         })
     }
@@ -426,6 +431,16 @@ fn push_wrapped_message_preview(
             .into_iter()
             .map(|text| PreviewMessage { role, text }),
     );
+}
+
+fn push_preview_message(messages: &mut Vec<PreviewMessage>, message: PreviewMessage) {
+    if messages
+        .last()
+        .is_some_and(|last| last.role == message.role && last.text == message.text)
+    {
+        return;
+    }
+    messages.push(message);
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,6 +534,7 @@ mod tests {
     #[test]
     fn extracts_rollout_preview_from_user_and_assistant_messages() {
         let user = r#"{"type":"event_msg","payload":{"type":"user_message","message":"hello from user","images":[]}}"#;
+        let agent = r#"{"type":"event_msg","payload":{"type":"agent_message","message":"hello from agent","phase":"commentary"}}"#;
         let user_response_item = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from response item user"}]}}"#;
         let assistant = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from assistant"}]}}"#;
         let developer = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hidden"}]}}"#;
@@ -542,6 +558,13 @@ mod tests {
             Some(PreviewMessage {
                 role: PreviewRole::Assistant,
                 text: "hello from assistant".into()
+            })
+        );
+        assert_eq!(
+            preview_line(agent),
+            Some(PreviewMessage {
+                role: PreviewRole::Assistant,
+                text: "hello from agent".into()
             })
         );
         assert_eq!(preview_line(developer), None);
@@ -593,6 +616,55 @@ mod tests {
                 PreviewMessage {
                     role: PreviewRole::User,
                     text: "old prompt".into()
+                },
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deduplicates_mirrored_response_and_event_messages() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-preview-dedupe-test-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"same user"}]}}"#.to_string()
+                + "\n"
+                + r#"{"type":"event_msg","payload":{"type":"user_message","message":"same user","images":[]}}"#
+                + "\n"
+                + r#"{"type":"event_msg","payload":{"type":"agent_message","message":"same assistant","phase":"commentary"}}"#
+                + "\n"
+                + r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"same assistant"}]}}"#
+                + "\n",
+        )
+        .unwrap();
+        let session = HistorySession {
+            profile: "work".into(),
+            codex_home: root.clone(),
+            session_id: "s1".into(),
+            title: "test".into(),
+            updated_at: 1,
+            cwd: None,
+            path: Some(path.display().to_string()),
+            is_codexhub_profile: true,
+        };
+
+        assert_eq!(
+            session_preview_messages(&session, 10),
+            vec![
+                PreviewMessage {
+                    role: PreviewRole::Assistant,
+                    text: "same assistant".into()
+                },
+                PreviewMessage::system(""),
+                PreviewMessage {
+                    role: PreviewRole::User,
+                    text: "same user".into()
                 },
             ]
         );
