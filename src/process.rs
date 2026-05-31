@@ -115,18 +115,25 @@ pub fn session_preview_lines(session: &HistorySession, max_lines: usize) -> Vec<
         return vec![format!("Cannot open rollout file: {path}")];
     };
     let reader = BufReader::new(file);
-    let mut out = Vec::new();
+    let mut messages = Vec::new();
     for line in reader.lines().map_while(Result::ok) {
         if let Some(text) = preview_line(&line) {
-            push_wrapped_preview(&mut out, &text, 120);
-            if out.len() >= max_lines {
-                out.truncate(max_lines);
-                break;
-            }
+            messages.push(text);
+        }
+    }
+    let mut out = Vec::new();
+    for (idx, message) in messages.into_iter().rev().enumerate() {
+        if idx > 0 {
+            out.push(String::new());
+        }
+        push_wrapped_preview(&mut out, &message, 120);
+        if out.len() >= max_lines {
+            out.truncate(max_lines);
+            break;
         }
     }
     if out.is_empty() {
-        vec!["No user or assistant messages found in rollout.".into()]
+        vec!["No user prompts found in rollout.".into()]
     } else {
         out
     }
@@ -310,7 +317,7 @@ fn event_message_preview(value: &Value) -> Option<String> {
     if message.is_empty() {
         None
     } else {
-        Some(format!("user: {message}"))
+        Some(message)
     }
 }
 
@@ -320,15 +327,11 @@ fn response_item_preview(value: &Value) -> Option<String> {
         return None;
     }
     let role = payload.pointer("/role").and_then(Value::as_str)?;
-    if !matches!(role, "user" | "assistant") {
+    if role != "user" {
         return None;
     }
     let text = message_content_text(payload.pointer("/content")?)?;
-    if text.is_empty() {
-        None
-    } else {
-        Some(format!("{role}: {text}"))
-    }
+    (!text.is_empty()).then_some(text)
 }
 
 fn message_content_text(content: &Value) -> Option<String> {
@@ -466,17 +469,56 @@ mod tests {
     }
 
     #[test]
-    fn extracts_rollout_preview_from_user_and_assistant_messages() {
+    fn extracts_rollout_preview_from_user_messages() {
         let user = r#"{"type":"event_msg","payload":{"type":"user_message","message":"hello from user","images":[]}}"#;
+        let user_response_item = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from response item user"}]}}"#;
         let assistant = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from assistant"}]}}"#;
         let developer = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hidden"}]}}"#;
 
-        assert_eq!(preview_line(user).as_deref(), Some("user: hello from user"));
+        assert_eq!(preview_line(user).as_deref(), Some("hello from user"));
         assert_eq!(
-            preview_line(assistant).as_deref(),
-            Some("assistant: hello from assistant")
+            preview_line(user_response_item).as_deref(),
+            Some("hello from response item user")
         );
+        assert_eq!(preview_line(assistant), None);
         assert_eq!(preview_line(developer), None);
+    }
+
+    #[test]
+    fn renders_user_prompts_newest_first_with_spacing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-preview-test-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"old prompt","images":[]}}"#.to_string()
+                + "\n"
+                + r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ignored assistant"}]}}"#
+                + "\n"
+                + r#"{"type":"event_msg","payload":{"type":"user_message","message":"new prompt","images":[]}}"#
+                + "\n",
+        )
+        .unwrap();
+        let session = HistorySession {
+            profile: "work".into(),
+            codex_home: root.clone(),
+            session_id: "s1".into(),
+            title: "test".into(),
+            updated_at: 1,
+            cwd: None,
+            path: Some(path.display().to_string()),
+            is_codexhub_profile: true,
+        };
+
+        assert_eq!(
+            session_preview_lines(&session, 10),
+            vec!["new prompt", "", "old prompt"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
