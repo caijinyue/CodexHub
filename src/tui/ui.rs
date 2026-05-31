@@ -7,7 +7,7 @@ use crate::{profile::ProfileInfo, size};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::Frame,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap},
 };
@@ -465,7 +465,7 @@ fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .as_deref()
         .map(short_home)
         .unwrap_or_else(|| "-".into());
-    let preview = crate::process::session_preview_lines(&session, 18);
+    let preview = crate::process::session_preview_messages(&session, 18);
     let mut lines = vec![
         Line::from(Span::styled(
             session.title.clone(),
@@ -512,7 +512,7 @@ fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
     lines.extend(
         preview
             .into_iter()
-            .map(|line| Line::from(Span::styled(line, Style::default().fg(app.theme.text)))),
+            .map(|message| preview_message_line(app, message)),
     );
     frame.render_widget(
         Paragraph::new(lines)
@@ -572,21 +572,7 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
             )
         }
         InputMode::ContinueProfile => return,
-        InputMode::UpdatePrompt => {
-            let body = app
-                .update_info
-                .as_ref()
-                .map(|info| {
-                    format!(
-                        "A CodexHub update is available.\n\nTrack:  {}\nLocal:  {}\nRemote: {}\n\nPress Enter or y to update, n or Esc to skip.",
-                        info.remote_ref,
-                        short_hash(&info.local_head),
-                        short_hash(&info.remote_head)
-                    )
-                })
-                .unwrap_or_else(|| "No update information available.".into());
-            ("Update Available", body)
-        }
+        InputMode::UpdatePrompt => return draw_update_popup(frame, app, area),
         InputMode::Message => ("Message", app.message.clone()),
         InputMode::None => return,
     };
@@ -598,6 +584,73 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn draw_update_popup(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let body = app
+        .update_info
+        .as_ref()
+        .map(|info| {
+            vec![
+                Line::from(Span::styled(
+                    "CodexHub update available",
+                    Style::default()
+                        .fg(app.theme.title)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                update_field_line(app, "Track", info.remote_ref.clone()),
+                update_field_line(app, "Local", short_hash(&info.local_head).to_string()),
+                update_field_line(app, "Remote", short_hash(&info.remote_head).to_string()),
+                Line::from(""),
+                Line::from(vec![
+                    key_span(app, "Enter"),
+                    Span::styled(" update   ", Style::default().fg(app.theme.text)),
+                    key_span(app, "y"),
+                    Span::styled(" update   ", Style::default().fg(app.theme.text)),
+                    key_span(app, "n"),
+                    Span::styled(" skip   ", Style::default().fg(app.theme.text)),
+                    key_span(app, "Esc"),
+                    Span::styled(" skip", Style::default().fg(app.theme.text)),
+                ]),
+            ]
+        })
+        .unwrap_or_else(|| {
+            vec![Line::from(Span::styled(
+                "No update information available.",
+                Style::default().fg(app.theme.text),
+            ))]
+        });
+    frame.render_widget(
+        Paragraph::new(body)
+            .block(widgets::block("⬆ Update", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn update_field_line(app: &App, label: &str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<8}"),
+            Style::default()
+                .fg(app.theme.muted)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value, Style::default().fg(app.theme.text)),
+    ])
+}
+
+fn key_span(app: &App, key: &str) -> Span<'static> {
+    Span::styled(
+        key.to_string(),
+        Style::default()
+            .fg(app.theme.key_fg)
+            .bg(app.theme.action)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
@@ -689,6 +742,40 @@ fn update_detail_status(app: &App) -> String {
         format!("failed: {error}")
     } else {
         "current".into()
+    }
+}
+
+fn preview_message_line(app: &App, message: crate::process::PreviewMessage) -> Line<'static> {
+    if message.text.is_empty() {
+        return Line::from("");
+    }
+    let style = match message.role {
+        crate::process::PreviewRole::User => Style::default()
+            .fg(app.theme.text)
+            .bg(preview_user_bg(app.theme))
+            .add_modifier(Modifier::BOLD),
+        crate::process::PreviewRole::Assistant => Style::default().fg(app.theme.text),
+    };
+    let prefix = match message.role {
+        crate::process::PreviewRole::User => "  ",
+        crate::process::PreviewRole::Assistant => "",
+    };
+    let suffix = match message.role {
+        crate::process::PreviewRole::User => "  ",
+        crate::process::PreviewRole::Assistant => "",
+    };
+    Line::from(Span::styled(
+        format!("{prefix}{}{suffix}", message.text),
+        style,
+    ))
+}
+
+fn preview_user_bg(theme: widgets::Theme) -> Color {
+    match theme.bg {
+        Color::Rgb(r, g, b) if u16::from(r) + u16::from(g) + u16::from(b) > 384 => {
+            Color::Rgb(226, 232, 240)
+        }
+        _ => Color::Rgb(45, 55, 72),
     }
 }
 

@@ -30,6 +30,18 @@ pub struct HistorySession {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewMessage {
+    pub role: PreviewRole,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginMethod {
     DeviceCode,
     Web,
@@ -107,35 +119,48 @@ pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &st
     codex_resume(target_profile, &session.session_id)
 }
 
-pub fn session_preview_lines(session: &HistorySession, max_lines: usize) -> Vec<String> {
+pub fn session_preview_messages(session: &HistorySession, max_lines: usize) -> Vec<PreviewMessage> {
     let Some(path) = session.path.as_deref() else {
-        return vec!["No rollout file path available.".into()];
+        return vec![PreviewMessage::system("No rollout file path available.")];
     };
     let Ok(file) = File::open(path) else {
-        return vec![format!("Cannot open rollout file: {path}")];
+        return vec![PreviewMessage::system(format!(
+            "Cannot open rollout file: {path}"
+        ))];
     };
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
     for line in reader.lines().map_while(Result::ok) {
-        if let Some(text) = preview_line(&line) {
-            messages.push(text);
+        if let Some(message) = preview_line(&line) {
+            messages.push(message);
         }
     }
     let mut out = Vec::new();
     for (idx, message) in messages.into_iter().rev().enumerate() {
         if idx > 0 {
-            out.push(String::new());
+            out.push(PreviewMessage::system(""));
         }
-        push_wrapped_preview(&mut out, &message, 120);
+        push_wrapped_message_preview(&mut out, message.role, &message.text, 120);
         if out.len() >= max_lines {
             out.truncate(max_lines);
             break;
         }
     }
     if out.is_empty() {
-        vec!["No user prompts found in rollout.".into()]
+        vec![PreviewMessage::system(
+            "No user or assistant messages found in rollout.",
+        )]
     } else {
         out
+    }
+}
+
+impl PreviewMessage {
+    fn system(text: impl Into<String>) -> Self {
+        Self {
+            role: PreviewRole::Assistant,
+            text: text.into(),
+        }
     }
 }
 
@@ -300,7 +325,7 @@ fn trim_preview(text: &str) -> String {
     }
 }
 
-fn preview_line(line: &str) -> Option<String> {
+fn preview_line(line: &str) -> Option<PreviewMessage> {
     let value: Value = serde_json::from_str(line).ok()?;
     match value.pointer("/type").and_then(Value::as_str) {
         Some("event_msg") => event_message_preview(&value),
@@ -309,7 +334,7 @@ fn preview_line(line: &str) -> Option<String> {
     }
 }
 
-fn event_message_preview(value: &Value) -> Option<String> {
+fn event_message_preview(value: &Value) -> Option<PreviewMessage> {
     let message = value
         .pointer("/payload/message")
         .and_then(Value::as_str)
@@ -317,21 +342,29 @@ fn event_message_preview(value: &Value) -> Option<String> {
     if message.is_empty() {
         None
     } else {
-        Some(message)
+        Some(PreviewMessage {
+            role: PreviewRole::User,
+            text: message,
+        })
     }
 }
 
-fn response_item_preview(value: &Value) -> Option<String> {
+fn response_item_preview(value: &Value) -> Option<PreviewMessage> {
     let payload = value.pointer("/payload")?;
     if payload.pointer("/type").and_then(Value::as_str) != Some("message") {
         return None;
     }
     let role = payload.pointer("/role").and_then(Value::as_str)?;
-    if role != "user" {
+    let role = match role {
+        "user" => PreviewRole::User,
+        "assistant" => PreviewRole::Assistant,
+        _ => return None,
+    };
+    let text = message_content_text(payload.pointer("/content")?)?;
+    if text.is_empty() {
         return None;
     }
-    let text = message_content_text(payload.pointer("/content")?)?;
-    (!text.is_empty()).then_some(text)
+    Some(PreviewMessage { role, text })
 }
 
 fn message_content_text(content: &Value) -> Option<String> {
@@ -378,6 +411,21 @@ fn push_wrapped_preview(out: &mut Vec<String>, text: &str, width: usize) {
     if !current.is_empty() {
         out.push(current);
     }
+}
+
+fn push_wrapped_message_preview(
+    out: &mut Vec<PreviewMessage>,
+    role: PreviewRole,
+    text: &str,
+    width: usize,
+) {
+    let mut wrapped = Vec::new();
+    push_wrapped_preview(&mut wrapped, text, width);
+    out.extend(
+        wrapped
+            .into_iter()
+            .map(|text| PreviewMessage { role, text }),
+    );
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,23 +517,38 @@ mod tests {
     }
 
     #[test]
-    fn extracts_rollout_preview_from_user_messages() {
+    fn extracts_rollout_preview_from_user_and_assistant_messages() {
         let user = r#"{"type":"event_msg","payload":{"type":"user_message","message":"hello from user","images":[]}}"#;
         let user_response_item = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from response item user"}]}}"#;
         let assistant = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from assistant"}]}}"#;
         let developer = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hidden"}]}}"#;
 
-        assert_eq!(preview_line(user).as_deref(), Some("hello from user"));
         assert_eq!(
-            preview_line(user_response_item).as_deref(),
-            Some("hello from response item user")
+            preview_line(user),
+            Some(PreviewMessage {
+                role: PreviewRole::User,
+                text: "hello from user".into()
+            })
         );
-        assert_eq!(preview_line(assistant), None);
+        assert_eq!(
+            preview_line(user_response_item),
+            Some(PreviewMessage {
+                role: PreviewRole::User,
+                text: "hello from response item user".into()
+            })
+        );
+        assert_eq!(
+            preview_line(assistant),
+            Some(PreviewMessage {
+                role: PreviewRole::Assistant,
+                text: "hello from assistant".into()
+            })
+        );
         assert_eq!(preview_line(developer), None);
     }
 
     #[test]
-    fn renders_user_prompts_newest_first_with_spacing() {
+    fn renders_conversation_newest_first_with_spacing() {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -515,8 +578,23 @@ mod tests {
         };
 
         assert_eq!(
-            session_preview_lines(&session, 10),
-            vec!["new prompt", "", "old prompt"]
+            session_preview_messages(&session, 10),
+            vec![
+                PreviewMessage {
+                    role: PreviewRole::User,
+                    text: "new prompt".into()
+                },
+                PreviewMessage::system(""),
+                PreviewMessage {
+                    role: PreviewRole::Assistant,
+                    text: "ignored assistant".into()
+                },
+                PreviewMessage::system(""),
+                PreviewMessage {
+                    role: PreviewRole::User,
+                    text: "old prompt".into()
+                },
+            ]
         );
         std::fs::remove_dir_all(root).unwrap();
     }
