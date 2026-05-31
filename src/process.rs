@@ -2,6 +2,7 @@ use crate::profile;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -16,6 +17,8 @@ pub struct AccountStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistorySession {
     pub profile: String,
+    pub codex_home: PathBuf,
+    pub is_codexhub_profile: bool,
     pub session_id: String,
     pub title: String,
     pub cwd: Option<String>,
@@ -41,8 +44,28 @@ pub fn codex_resume(name: &str, session_id: &str) -> Result<i32> {
     run_codex(name, ["resume", "--all", session_id])
 }
 
+pub fn codex_resume_session(session: &HistorySession) -> Result<i32> {
+    run_codex_home(
+        &session.codex_home,
+        ["resume", "--all", &session.session_id],
+    )
+}
+
 pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &str) -> Result<i32> {
-    if session.profile == target_profile {
+    if session.is_codexhub_profile {
+        if session.profile == target_profile {
+            return codex_resume(target_profile, &session.session_id);
+        }
+        let path = session
+            .path
+            .as_deref()
+            .context("Selected session does not expose a rollout path")?;
+        profile::copy_session_to_profile(
+            &session.profile,
+            target_profile,
+            &session.session_id,
+            path,
+        )?;
         return codex_resume(target_profile, &session.session_id);
     }
 
@@ -50,7 +73,12 @@ pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &st
         .path
         .as_deref()
         .context("Selected session does not expose a rollout path")?;
-    profile::copy_session_to_profile(&session.profile, target_profile, &session.session_id, path)?;
+    profile::copy_session_root_to_profile(
+        &session.codex_home,
+        target_profile,
+        &session.session_id,
+        path,
+    )?;
     codex_resume(target_profile, &session.session_id)
 }
 
@@ -59,9 +87,16 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     let home = profile::ensure_exists(name)?;
+    run_codex_home(&home, args)
+}
+
+fn run_codex_home<'a, I>(home: &std::path::Path, args: I) -> Result<i32>
+where
+    I: IntoIterator<Item = &'a str>,
+{
     let status = Command::new("codex")
         .args(args)
-        .env("CODEX_HOME", &home)
+        .env("CODEX_HOME", home)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -76,21 +111,40 @@ pub fn codex_account_status(name: &str) -> Result<AccountStatus> {
 }
 
 pub fn codex_history_sessions(name: &str, limit: usize) -> Result<Vec<HistorySession>> {
-    let text = app_server_request(
-        name,
+    let home = profile::ensure_exists(name)?;
+    codex_history_sessions_from_home(name, home, true, limit)
+}
+
+pub fn codex_history_sessions_from_home(
+    label: &str,
+    home: PathBuf,
+    is_codexhub_profile: bool,
+    limit: usize,
+) -> Result<Vec<HistorySession>> {
+    let text = app_server_request_home(
+        &home,
         3,
         &format!(
             r#"{{"id":3,"method":"thread/list","params":{{"limit":{limit},"sortKey":"updated_at","sortDirection":"desc","sourceKinds":[],"archived":false,"cwd":null,"useStateDbOnly":false}}}}"#
         ),
     )?;
-    parse_history_sessions(name, &text).context("Parsing codex resume session list")
+    parse_history_sessions(label, home, is_codexhub_profile, &text)
+        .context("Parsing codex resume session list")
 }
 
 fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<String> {
     let home = profile::ensure_exists(name)?;
+    app_server_request_home(&home, request_id, request)
+}
+
+fn app_server_request_home(
+    home: &std::path::Path,
+    request_id: u64,
+    request: &str,
+) -> Result<String> {
     let mut child = Command::new("codex")
         .args(["app-server", "--listen", "stdio://"])
-        .env("CODEX_HOME", &home)
+        .env("CODEX_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -141,7 +195,12 @@ fn remaining_percent(used_percent: u8) -> Option<u8> {
     Some(100u8.saturating_sub(used_percent.min(100)))
 }
 
-fn parse_history_sessions(profile: &str, text: &str) -> Option<Vec<HistorySession>> {
+fn parse_history_sessions(
+    profile: &str,
+    codex_home: PathBuf,
+    is_codexhub_profile: bool,
+    text: &str,
+) -> Option<Vec<HistorySession>> {
     for line in text.lines() {
         let value: ThreadListLine = match serde_json::from_str(line) {
             Ok(value) => value,
@@ -154,6 +213,8 @@ fn parse_history_sessions(profile: &str, text: &str) -> Option<Vec<HistorySessio
                 .into_iter()
                 .map(|thread| HistorySession {
                     profile: profile.to_string(),
+                    codex_home: codex_home.clone(),
+                    is_codexhub_profile,
                     session_id: thread.session_id,
                     title: thread
                         .name
@@ -254,12 +315,15 @@ mod tests {
 {"method":"remoteControl/status/changed","params":{"status":"disabled"}}
 {"id":3,"result":{"data":[{"id":"t1","sessionId":"s1","preview":"first user request with a long enough preview","updatedAt":200,"cwd":"/repo","path":"/tmp/source/sessions/rollout-s1.jsonl","name":null},{"id":"t2","sessionId":"s2","preview":"ignored","updatedAt":300,"cwd":"/repo2","path":"/tmp/source/sessions/rollout-s2.jsonl","name":"Named thread"}],"nextCursor":null,"backwardsCursor":null}}"#;
 
-        let sessions = parse_history_sessions("work", output).unwrap();
+        let home = PathBuf::from("/tmp/source");
+        let sessions = parse_history_sessions("work", home.clone(), true, output).unwrap();
 
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "s2");
         assert_eq!(sessions[0].title, "Named thread");
         assert_eq!(sessions[1].profile, "work");
+        assert_eq!(sessions[1].codex_home, home);
+        assert!(sessions[1].is_codexhub_profile);
         assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
         assert_eq!(
             sessions[1].path.as_deref(),

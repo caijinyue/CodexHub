@@ -339,11 +339,11 @@ fn external_resume(
         app.set_message("No history session selected");
         return Ok(());
     };
-    crate::activation::activate_profile(&session.profile)?;
-    app.active_profile = Some(session.profile.clone());
-    let _status = run_suspended(terminal, || {
-        crate::process::codex_resume(&session.profile, &session.session_id)
-    })?;
+    if session.is_codexhub_profile {
+        crate::activation::activate_profile(&session.profile)?;
+        app.active_profile = Some(session.profile.clone());
+    }
+    let _status = run_suspended(terminal, || crate::process::codex_resume_session(&session))?;
     app.refresh_profiles()?;
     app.refresh_history_sessions()?;
     Ok(())

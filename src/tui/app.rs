@@ -317,12 +317,18 @@ fn account_statuses(names: Vec<String>) -> Vec<(String, process::AccountStatus)>
 }
 
 fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
-    let handles: Vec<_> = names
+    let mut handles: Vec<_> = names
         .into_iter()
         .map(|name| {
             thread::spawn(move || process::codex_history_sessions(&name, 200).unwrap_or_default())
         })
         .collect();
+    if let Some(home) = default_codex_history_home() {
+        handles.push(thread::spawn(move || {
+            process::codex_history_sessions_from_home("~/.codex", home, false, 200)
+                .unwrap_or_default()
+        }));
+    }
     let mut sessions: Vec<_> = handles
         .into_iter()
         .filter_map(|handle| handle.join().ok())
@@ -330,6 +336,11 @@ fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
         .collect();
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     sessions
+}
+
+fn default_codex_history_home() -> Option<PathBuf> {
+    let home = profile::default_codex_home().ok()?;
+    home.join("auth.json").is_file().then_some(home)
 }
 
 fn filter_history_sessions(
@@ -409,6 +420,8 @@ mod tests {
     fn history_session(id: &str, cwd: Option<&str>, updated_at: i64) -> process::HistorySession {
         process::HistorySession {
             profile: "work".into(),
+            codex_home: PathBuf::from("/tmp/work"),
+            is_codexhub_profile: true,
             session_id: id.into(),
             title: id.into(),
             cwd: cwd.map(str::to_string),

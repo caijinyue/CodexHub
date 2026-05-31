@@ -157,6 +157,20 @@ pub fn copy_session_to_profile(
     source_session_path: &str,
 ) -> Result<PathBuf> {
     let source_root = ensure_exists(source_profile)?;
+    copy_session_root_to_profile(
+        &source_root,
+        target_profile,
+        session_id,
+        source_session_path,
+    )
+}
+
+pub fn copy_session_root_to_profile(
+    source_root: &Path,
+    target_profile: &str,
+    session_id: &str,
+    source_session_path: &str,
+) -> Result<PathBuf> {
     let target_root = ensure_exists(target_profile)?;
     let source_session_path = PathBuf::from(source_session_path);
     if !source_session_path.is_file() {
@@ -169,7 +183,7 @@ pub fn copy_session_to_profile(
         .strip_prefix(&source_root)
         .with_context(|| {
             format!(
-                "Session file {} is not under source profile {}",
+                "Session file {} is not under source home {}",
                 source_session_path.display(),
                 source_root.display()
             )
@@ -420,7 +434,7 @@ fn logs_size(path: &std::path::Path) -> Result<u64> {
     Ok(total)
 }
 
-fn default_codex_home() -> Result<PathBuf> {
+pub fn default_codex_home() -> Result<PathBuf> {
     Ok(dirs::home_dir()
         .context("Cannot determine home directory")?
         .join(".codex"))
