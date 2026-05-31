@@ -93,7 +93,7 @@ pub fn run() -> Result<()> {
         }
         Commands::Login { name } => {
             activation::activate_profile(&name)?;
-            std::process::exit(process::codex_login(&name)?)
+            std::process::exit(process::codex_login(&name, process::LoginMethod::Web)?)
         }
         Commands::Activate { name } => {
             let result = activation::activate_profile(&name)?;

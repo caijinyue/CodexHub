@@ -36,7 +36,6 @@ fn handle_key(
     }
     match app.screen {
         Screen::List => handle_list(terminal, app, key),
-        Screen::Detail => handle_detail(terminal, app, key),
         Screen::Doctor => handle_doctor(app, key),
         Screen::History => handle_history(terminal, app, key),
     }
@@ -50,47 +49,18 @@ fn handle_list(
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('t') => app.cycle_theme()?,
-        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-        KeyCode::Enter => app.screen = Screen::Detail,
-        KeyCode::Char('n') => start_input(app, InputMode::NewProfile),
-        KeyCode::Char('i') => start_input(app, InputMode::ImportDefault),
-        KeyCode::Char('2') => start_input(app, InputMode::ImportSub2),
+        KeyCode::Down => app.move_down(),
+        KeyCode::Up => app.move_up(),
+        KeyCode::Enter => app.activate_current_profile()?,
+        KeyCode::Char('n') => start_input(app, InputMode::AddAccountMethod),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
-        KeyCode::Char('a') => app.activate_current_profile()?,
-        KeyCode::Char('l') => external(terminal, app, External::Login)?,
-        KeyCode::Char('r') => external(terminal, app, External::Run)?,
-        KeyCode::Char('e') => start_input(app, InputMode::ExecPrompt),
+        KeyCode::Char('l') => start_input(app, InputMode::LoginMethodForSelected),
+        KeyCode::Char('r') => app.refresh_profiles()?,
+        KeyCode::Char('o') => external_open(terminal, app)?,
         KeyCode::Char('h') => {
             app.refresh_history_sessions()?;
             app.screen = Screen::History;
         }
-        KeyCode::Char('s') => app.input_mode = InputMode::ShareConfirm,
-        KeyCode::Char('u') => app.input_mode = InputMode::UnshareConfirm,
-        KeyCode::Char('D') => {
-            app.doctor_checks = crate::doctor::run(false)?;
-            app.screen = Screen::Doctor;
-        }
-        _ => {}
-    }
-    Ok(false)
-}
-
-fn handle_detail(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    key: KeyEvent,
-) -> Result<bool> {
-    match key.code {
-        KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('b') => app.screen = Screen::List,
-        KeyCode::Char('t') => app.cycle_theme()?,
-        KeyCode::Char('a') => app.activate_current_profile()?,
-        KeyCode::Char('l') => external(terminal, app, External::Login)?,
-        KeyCode::Char('r') => external(terminal, app, External::Run)?,
-        KeyCode::Char('e') => start_input(app, InputMode::ExecPrompt),
-        KeyCode::Char('s') => app.input_mode = InputMode::ShareConfirm,
-        KeyCode::Char('u') => app.input_mode = InputMode::UnshareConfirm,
         KeyCode::Char('D') => {
             app.doctor_checks = crate::doctor::run(false)?;
             app.screen = Screen::Doctor;
@@ -102,8 +72,7 @@ fn handle_detail(
 
 fn handle_doctor(app: &mut App, key: KeyEvent) -> Result<bool> {
     match key.code {
-        KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('q') => app.screen = Screen::List,
         KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Char('r') => app.doctor_checks = crate::doctor::run(false)?,
         _ => {}
@@ -117,11 +86,10 @@ fn handle_history(
     key: KeyEvent,
 ) -> Result<bool> {
     match key.code {
-        KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('b') => app.screen = Screen::List,
+        KeyCode::Char('q') => app.screen = Screen::List,
         KeyCode::Char('t') => app.cycle_theme()?,
-        KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
-        KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
+        KeyCode::Down => app.move_history_down(),
+        KeyCode::Up => app.move_history_up(),
         KeyCode::Char('a') => app.toggle_history_path_scope(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,
         KeyCode::Char('c') => start_continue_profile_select(app),
@@ -142,13 +110,37 @@ fn handle_input(
             if app.input_mode == InputMode::UpdatePrompt {
                 app.update_info = None;
             }
+            app.pending_login_method = None;
             app.input_mode = InputMode::None;
         }
+        KeyCode::Char('1') if app.input_mode == InputMode::AddAccountMethod => {
+            app.input_mode = InputMode::LoginMethodForNewAccount;
+        }
+        KeyCode::Char('2') if app.input_mode == InputMode::AddAccountMethod => {
+            start_input(app, InputMode::ImportDefault);
+        }
+        KeyCode::Char('3') if app.input_mode == InputMode::AddAccountMethod => {
+            start_input(app, InputMode::ImportSub2);
+        }
+        KeyCode::Char('1') if app.input_mode == InputMode::LoginMethodForNewAccount => {
+            app.pending_login_method = Some(crate::process::LoginMethod::DeviceCode);
+            start_input(app, InputMode::NewLoginProfileName);
+        }
+        KeyCode::Char('2') if app.input_mode == InputMode::LoginMethodForNewAccount => {
+            app.pending_login_method = Some(crate::process::LoginMethod::Web);
+            start_input(app, InputMode::NewLoginProfileName);
+        }
+        KeyCode::Char('1') if app.input_mode == InputMode::LoginMethodForSelected => {
+            external_relogin(terminal, app, crate::process::LoginMethod::DeviceCode)?;
+        }
+        KeyCode::Char('2') if app.input_mode == InputMode::LoginMethodForSelected => {
+            external_relogin(terminal, app, crate::process::LoginMethod::Web)?;
+        }
         KeyCode::Enter => submit_input(terminal, app)?,
-        KeyCode::Down | KeyCode::Char('j') if app.input_mode == InputMode::ContinueProfile => {
+        KeyCode::Down if app.input_mode == InputMode::ContinueProfile => {
             app.move_continue_profile_down();
         }
-        KeyCode::Up | KeyCode::Char('k') if app.input_mode == InputMode::ContinueProfile => {
+        KeyCode::Up if app.input_mode == InputMode::ContinueProfile => {
             app.move_continue_profile_up();
         }
         KeyCode::Char('y') if app.input_mode == InputMode::UpdatePrompt => {
@@ -165,11 +157,10 @@ fn handle_input(
         KeyCode::Char(ch) => {
             if matches!(
                 app.input_mode,
-                InputMode::NewProfile
+                InputMode::NewLoginProfileName
                     | InputMode::ImportDefault
                     | InputMode::ImportSub2
                     | InputMode::DeleteConfirm
-                    | InputMode::ExecPrompt
             ) {
                 app.input.push(ch);
             }
@@ -184,24 +175,38 @@ fn submit_input(
     app: &mut App,
 ) -> Result<()> {
     match app.input_mode {
-        InputMode::NewProfile => {
+        InputMode::NewLoginProfileName => {
             let name = app.input.trim().to_string();
+            let method = app
+                .pending_login_method
+                .take()
+                .unwrap_or(crate::process::LoginMethod::DeviceCode);
             crate::profile::create(&name, false)?;
+            crate::activation::activate_profile(&name)?;
+            app.active_profile = Some(name.clone());
+            let status = run_suspended(terminal, || crate::process::codex_login(&name, method))?;
             app.refresh_profiles()?;
-            app.set_message(format!("Created profile {name}"));
+            if status == 0 {
+                app.set_message(format!("Added account {name} with {}", method.label()));
+            } else {
+                app.set_message(format!(
+                    "Created account {name}, but {} exited with status {status}",
+                    method.label()
+                ));
+            }
         }
         InputMode::ImportDefault => {
             let explicit = app.input.trim();
             let (name, _) =
                 crate::profile::import_default((!explicit.is_empty()).then_some(explicit))?;
             app.refresh_profiles()?;
-            app.set_message(format!("Imported ~/.codex as profile {name}"));
+            app.set_message(format!("Imported ~/.codex as account {name}"));
         }
         InputMode::ImportSub2 => {
             let json = app.input.trim();
             let (name, _) = crate::profile::import_sub2_json(json, None)?;
             app.refresh_profiles()?;
-            app.set_message(format!("Imported sub2 JSON as profile {name}"));
+            app.set_message(format!("Imported JSON as account {name}"));
         }
         InputMode::DeleteConfirm => {
             let Some(name) = app.current_name() else {
@@ -210,36 +215,15 @@ fn submit_input(
             if app.input.trim() == name {
                 crate::profile::delete(&name)?;
                 app.refresh_profiles()?;
-                app.set_message(format!("Deleted profile {name}"));
+                app.set_message(format!("Deleted account {name}"));
             } else {
                 app.set_message("Deletion cancelled");
             }
-        }
-        InputMode::ExecPrompt => {
-            external_with_prompt(terminal, app)?;
-            app.input_mode = InputMode::None;
-            app.input.clear();
         }
         InputMode::ContinueProfile => {
             external_continue_with_selected_profile(terminal, app)?;
             app.input_mode = InputMode::None;
             app.input.clear();
-        }
-        InputMode::ShareConfirm => {
-            let Some(name) = app.current_name() else {
-                return Ok(());
-            };
-            crate::shared::share_cache(&name)?;
-            app.refresh_profiles()?;
-            app.set_message(format!("Shared cache enabled for {name}"));
-        }
-        InputMode::UnshareConfirm => {
-            let Some(name) = app.current_name() else {
-                return Ok(());
-            };
-            crate::shared::unshare_cache(&name, false, true)?;
-            app.refresh_profiles()?;
-            app.set_message(format!("Shared cache disabled for {name}"));
         }
         InputMode::UpdatePrompt => {
             install_update(terminal, app)?;
@@ -248,6 +232,9 @@ fn submit_input(
             app.input_mode = InputMode::None;
             app.input.clear();
         }
+        InputMode::AddAccountMethod
+        | InputMode::LoginMethodForNewAccount
+        | InputMode::LoginMethodForSelected => {}
         InputMode::None => {}
     }
     if app.input_mode != InputMode::Message {
@@ -262,13 +249,15 @@ fn start_input(app: &mut App, mode: InputMode) {
     if app.current_name().is_none()
         && !matches!(
             mode,
-            InputMode::NewProfile
+            InputMode::AddAccountMethod
+                | InputMode::LoginMethodForNewAccount
+                | InputMode::NewLoginProfileName
                 | InputMode::ImportDefault
                 | InputMode::ImportSub2
                 | InputMode::ContinueProfile
         )
     {
-        app.set_message("No profile selected");
+        app.set_message("No account selected");
     } else {
         app.input_mode = mode;
     }
@@ -276,7 +265,7 @@ fn start_input(app: &mut App, mode: InputMode) {
 
 fn start_continue_profile_select(app: &mut App) {
     if app.profiles.is_empty() {
-        app.set_message("No profile available");
+        app.set_message("No account available");
         return;
     }
     let selected = app
@@ -291,43 +280,42 @@ fn start_continue_profile_select(app: &mut App) {
     app.input_mode = InputMode::ContinueProfile;
 }
 
-enum External {
-    Login,
-    Run,
-}
-
-fn external(
+fn external_open(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    action: External,
 ) -> Result<()> {
     let Some(name) = app.current_name() else {
-        app.set_message("No profile selected");
+        app.set_message("No account selected");
         return Ok(());
     };
     crate::activation::activate_profile(&name)?;
     app.active_profile = Some(name.clone());
-    let _status = run_suspended(terminal, || match action {
-        External::Login => crate::process::codex_login(&name),
-        External::Run => crate::process::codex_run(&name, &[]),
-    })?;
+    let _status = run_suspended(terminal, || crate::process::codex_run(&name, &[]))?;
     app.refresh_profiles()?;
     Ok(())
 }
 
-fn external_with_prompt(
+fn external_relogin(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
+    method: crate::process::LoginMethod,
 ) -> Result<()> {
     let Some(name) = app.current_name() else {
-        app.set_message("No profile selected");
+        app.set_message("No account selected");
         return Ok(());
     };
-    let prompt = app.input.clone();
     crate::activation::activate_profile(&name)?;
     app.active_profile = Some(name.clone());
-    let _status = run_suspended(terminal, || crate::process::codex_exec(&name, &[prompt]))?;
+    let status = run_suspended(terminal, || crate::process::codex_login(&name, method))?;
     app.refresh_profiles()?;
+    if status == 0 {
+        app.set_message(format!("Relogged account {name} with {}", method.label()));
+    } else {
+        app.set_message(format!(
+            "Relogin for {name} with {} exited with status {status}",
+            method.label()
+        ));
+    }
     Ok(())
 }
 

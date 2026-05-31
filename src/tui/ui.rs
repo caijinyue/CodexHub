@@ -15,7 +15,6 @@ use ratatui::{
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     match app.screen {
         Screen::List => draw_profile_workspace(frame, app),
-        Screen::Detail => draw_profile_workspace(frame, app),
         Screen::Doctor => draw_doctor(frame, app),
         Screen::History => draw_history(frame, app),
     }
@@ -49,30 +48,21 @@ fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
         app,
         vertical[1],
         &[
-            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
             (
-                "Profile",
+                "Account",
                 &[
-                    ("Enter", "detail"),
-                    ("n", "new"),
-                    ("i", "import"),
-                    ("2", "sub2"),
+                    ("Enter", "activate"),
+                    ("n", "add"),
+                    ("l", "relogin"),
                     ("d", "delete"),
                 ],
             ),
-            (
-                "Codex",
-                &[
-                    ("a", "activate"),
-                    ("l", "login"),
-                    ("r", "run"),
-                    ("e", "exec"),
-                ],
-            ),
+            ("Codex", &[("o", "open")]),
             (
                 "System",
                 &[
                     ("h", "history"),
+                    ("r", "refresh"),
                     ("t", "theme"),
                     ("D", "doctor"),
                     ("q", "quit"),
@@ -121,10 +111,12 @@ fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .map(|(idx, profile)| {
             let selected = idx == app.selected;
             let active = app.active_profile.as_deref() == Some(profile.name.as_str());
-            let status = if profile.logged_in {
-                "signed in"
+            let status = if active {
+                "🟢 active"
+            } else if profile.logged_in {
+                "✅ signed in"
             } else {
-                "not signed in"
+                "🔐 relogin needed"
             };
             let quota = format!(
                 "5h {}  7d {}",
@@ -163,7 +155,7 @@ fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         });
     frame.render_widget(
         List::new(items)
-            .block(widgets::block("Profiles", app.theme))
+            .block(widgets::block("👤 Accounts", app.theme))
             .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
         inner[1],
     );
@@ -172,8 +164,8 @@ fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn draw_profile_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(profile) = app.profiles.get(app.selected) else {
         frame.render_widget(
-            Paragraph::new("No profile selected")
-                .block(widgets::block("Profile", app.theme))
+            Paragraph::new("No accounts yet\n\nPress n to add your first Codex account.")
+                .block(widgets::block("👤 Account", app.theme))
                 .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
             area,
         );
@@ -195,10 +187,12 @@ fn draw_profile_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
     let active = app.active_profile.as_deref() == Some(profile.name.as_str());
-    let status = if profile.logged_in {
-        "SIGNED IN"
+    let status = if active {
+        "🟢 ACTIVE"
+    } else if profile.logged_in {
+        "✅ SIGNED IN"
     } else {
-        "NOT SIGNED IN"
+        "🔐 LOGIN NEEDED"
     };
     let plan = profile.plan_type.clone().unwrap_or_else(|| "-".into());
     let lines = vec![
@@ -209,12 +203,7 @@ fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, 
                     .fg(app.theme.title)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                if active { "  ACTIVE" } else { "" },
-                Style::default()
-                    .fg(app.theme.ok)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("", Style::default()),
         ]),
         Line::from(vec![
             Span::styled(
@@ -242,7 +231,7 @@ fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, 
     ];
     frame.render_widget(
         Paragraph::new(lines)
-            .block(widgets::block("Selected Profile", app.theme))
+            .block(widgets::block("👤 Selected Account", app.theme))
             .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
         area,
     );
@@ -260,7 +249,7 @@ fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, are
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title("Quota")
+            .title("📊 Quota")
             .border_style(Style::default().fg(app.theme.border))
             .style(Style::default().bg(app.theme.panel)),
         area,
@@ -292,21 +281,10 @@ fn draw_gauge(frame: &mut Frame<'_>, app: &App, area: Rect, label: &str, value: 
 }
 
 fn draw_profile_details(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
-    let auth = profile.path.join("auth.json");
-    let config = profile.path.join("config.toml");
     let active_env = crate::config::paths()
         .map(|paths| paths.root.join("current.env").display().to_string())
         .unwrap_or_else(|_| "-".into());
     let rows = vec![
-        detail_row("Auth exists", bool_label(auth.exists())),
-        detail_row(
-            "Auth mtime",
-            profile
-                .auth_mtime
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_else(|| "-".into()),
-        ),
-        detail_row("Config exists", bool_label(config.exists())),
         detail_row(
             "Active env",
             if app.active_profile.is_some() {
@@ -319,9 +297,17 @@ fn draw_profile_details(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo,
         detail_row("Logs", size::human(profile.logs_size)),
         detail_row("Total", size::human(profile.total_size)),
         detail_row("Shared cache", bool_label(profile.shared_cache)),
+        detail_row(
+            "Auth updated",
+            profile
+                .auth_mtime
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row("Path", profile.path.display().to_string()),
     ];
     let table = Table::new(rows, [Constraint::Length(16), Constraint::Min(20)])
-        .block(widgets::block("Details", app.theme))
+        .block(widgets::block("💾 Storage", app.theme))
         .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
         .column_spacing(2);
     frame.render_widget(table, area);
@@ -353,7 +339,7 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
     });
     frame.render_widget(
         List::new(items)
-            .block(widgets::block("Doctor", app.theme))
+            .block(widgets::block("🩺 Doctor", app.theme))
             .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
         chunks[0],
     );
@@ -361,10 +347,7 @@ fn draw_doctor(frame: &mut Frame<'_>, app: &App) {
         frame,
         app,
         chunks[1],
-        &[
-            ("Move", &[("b", "back")]),
-            ("System", &[("t", "theme"), ("r", "rerun"), ("q", "quit")]),
-        ],
+        &[("System", &[("r", "rerun"), ("t", "theme"), ("q", "back")])],
     );
 }
 
@@ -392,18 +375,15 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
         app,
         vertical[1],
         &[
-            ("Move", &[("↑↓", "select"), ("j/k", "select")]),
             (
                 "Session",
                 &[
                     ("Enter", "resume"),
                     ("c", "continue as"),
                     ("a", "all/current"),
-                    ("r", "refresh"),
-                    ("b", "back"),
                 ],
             ),
-            ("System", &[("t", "theme"), ("q", "quit")]),
+            ("System", &[("r", "refresh"), ("t", "theme"), ("q", "back")]),
         ],
     );
 }
@@ -447,9 +427,9 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .style(style)
         });
     let title = if app.history_loading {
-        format!("Sessions: {} (loading...)", app.history_scope_label())
+        format!("🕘 Sessions: {} (loading...)", app.history_scope_label())
     } else {
-        format!("Sessions: {}", app.history_scope_label())
+        format!("🕘 Sessions: {}", app.history_scope_label())
     };
     frame.render_widget(
         List::new(items)
@@ -480,15 +460,16 @@ fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .as_deref()
         .map(short_home)
         .unwrap_or_else(|| "-".into());
-    let lines = vec![
+    let preview = crate::process::session_preview_lines(&session, 18);
+    let mut lines = vec![
         Line::from(Span::styled(
-            session.title,
+            session.title.clone(),
             Style::default()
                 .fg(app.theme.title)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        detail_line(app, "Profile", session.profile),
+        detail_line(app, "Source", session.profile),
         detail_line(app, "Updated", updated),
         detail_line(app, "CWD", cwd),
         detail_line(app, "Session", session.session_id),
@@ -511,11 +492,23 @@ fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " continue with another profile",
+                " continue with another account",
                 Style::default().fg(app.theme.text),
             ),
         ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "💬 Preview",
+            Style::default()
+                .fg(app.theme.title)
+                .add_modifier(Modifier::BOLD),
+        )),
     ];
+    lines.extend(
+        preview
+            .into_iter()
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(app.theme.text)))),
+    );
     frame.render_widget(
         Paragraph::new(lines)
             .block(widgets::block("Session Detail", app.theme))
@@ -534,38 +527,46 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(70, 30, frame.area());
     frame.render_widget(Clear, area);
     let (title, body) = match app.input_mode {
-        InputMode::NewProfile => ("New Profile", format!("Name: {}", app.input)),
+        InputMode::AddAccountMethod => (
+            "➕ Add Account",
+            "1  Login new account\n2  Use current ~/.codex\n3  Import JSON\n\nEsc cancel".into(),
+        ),
+        InputMode::LoginMethodForNewAccount => (
+            "Login Method",
+            "1  Device code\n2  Web login\n\nEsc cancel".into(),
+        ),
+        InputMode::LoginMethodForSelected => (
+            "Relogin Account",
+            "1  Device code\n2  Web login\n\nEsc cancel".into(),
+        ),
+        InputMode::NewLoginProfileName => {
+            ("➕ Add Account", format!("Account name: {}", app.input))
+        }
         InputMode::ImportDefault => (
-            "Import ~/.codex",
+            "Use Current ~/.codex",
             format!(
-                "Profile name: {}\nLeave empty to use the email address from ~/.codex/auth.json.",
+                "Account name: {}\nLeave empty to use the email address from ~/.codex/auth.json.",
                 app.input
             ),
         ),
         InputMode::ImportSub2 => (
-            "Import sub2 JSON",
+            "Import JSON",
             format!(
-                "JSON path: {}\nCreates a profile named from the account email.",
+                "JSON path: {}\nCreates an account named from the JSON email.",
                 app.input
             ),
         ),
         InputMode::DeleteConfirm => {
             let expected = app.current_name().unwrap_or_default();
             (
-                "Delete Profile",
-                format!("Type \"{expected}\" to confirm:\n{}", app.input),
+                "Delete Account",
+                format!(
+                    "Type \"{expected}\" to delete this account.\nThis does not delete your OpenAI account.\n\n{}",
+                    app.input
+                ),
             )
         }
         InputMode::ContinueProfile => return,
-        InputMode::ExecPrompt => ("Codex Exec", format!("Prompt: {}", app.input)),
-        InputMode::ShareConfirm => (
-            "Share Cache",
-            "Press Enter to confirm, Esc to cancel".into(),
-        ),
-        InputMode::UnshareConfirm => (
-            "Unshare Cache",
-            "Press Enter to confirm, Esc to cancel".into(),
-        ),
         InputMode::UpdatePrompt => {
             let body = app
                 .update_info
@@ -644,10 +645,10 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
         ],
     )
     .header(
-        Row::new(["Profile", "State", "5h", "7day", "Member"])
+        Row::new(["Account", "State", "5h", "7day", "Member"])
             .style(widgets::header_style(app.theme)),
     )
-    .block(widgets::block("Continue With Profile", app.theme))
+    .block(widgets::block("Continue With Account", app.theme))
     .style(Style::default().fg(app.theme.text).bg(app.theme.panel));
     frame.render_widget(table, area);
 }

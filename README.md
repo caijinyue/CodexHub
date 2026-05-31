@@ -81,21 +81,19 @@ or just:
 codexhub
 ```
 
-[Profile List Screenshot]
-
-[Profile Detail Screenshot]
+[Account List Screenshot]
 
 [Doctor Screenshot]
 
-The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the membership expiration date when available. Profiles are sorted from earliest membership expiration to latest membership expiration, with unknown expirations last.
+The account list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the membership expiration date when available. Profiles are sorted from earliest membership expiration to latest membership expiration, with unknown expirations last. The right side of the main view shows the selected account details, quota, storage, and path.
 
 The TUI uses the terminal's light/dark preference when it can detect one. Press `t` to cycle the saved theme preference through `auto`, `light`, and `dark`. You can also force a theme for one run with `CODEXHUB_THEME=light` or `CODEXHUB_THEME=dark`.
 
-Press `a` from the profile list or detail screen to activate the selected profile as the current `CODEX_HOME` for tools launched outside CodexHub. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh` on Linux/macOS or `activate.ps1` on Windows, and `~/.codexhub/current_profile`. On Linux it also writes a user environment file under `~/.config/environment.d/`; on Linux/macOS/Windows it best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
+Press `n` to add an account. The TUI can log in a new account with device-code or web login, import the current `~/.codex`, or import a sub2 JSON export. Press `Enter` from the main account list to activate the selected account as the current `CODEX_HOME` for tools launched outside CodexHub. Press `l` to relogin the selected account, `o` to open Codex with the selected account, and `r` to refresh account status. CodexHub writes `~/.codexhub/current.env`, `~/.codexhub/activate.sh` on Linux/macOS or `activate.ps1` on Windows, and `~/.codexhub/current_profile`. On Linux it also writes a user environment file under `~/.config/environment.d/`; on Linux/macOS/Windows it best-effort publishes the value to the current user desktop environment. Restart Codex Desktop after switching because already-running apps cannot receive environment changes from CodexHub.
 
 CodexHub checks GitHub for updates in the background when the TUI starts. If the remote repository has a newer commit, it shows an update prompt. Press `Enter` or `y` to run `git pull --ff-only` and `cargo install --path .`, or press `n`/`Esc` to skip.
 
-Press `h` from the profile list to show resume sessions across all profiles and the default `~/.codex` home. The history screen loads in the background and supports scrolling through the merged session list. By default, it shows sessions whose CWD matches the directory where CodexHub was started; press `a` to toggle between current-path sessions and all paths. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that session's original `CODEX_HOME`.
+Press `h` from the account list to show resume sessions across all profiles and the default `~/.codex` home. The history screen loads in the background and supports scrolling through the merged session list. By default, it shows sessions whose CWD matches the directory where CodexHub was started; press `a` to toggle between current-path sessions and all paths. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. The right side previews the selected session. Press `Enter` on a row to run `codex resume` with that session's original `CODEX_HOME`. Press `q` from history or doctor to return to the main account list; press `q` again from the main view to quit.
 
 If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, choose the target profile from the popup list, and press `Enter`. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
 
@@ -235,4 +233,4 @@ CodexHub derives the profile name from the account email address. You can pass a
 codexhub import-sub2 accounts.json work
 ```
 
-The import creates `~/.codexhub/profiles/<name>/`, writes a Codex-compatible `auth.json`, creates `sessions/`, and copies `~/.codex/config.toml` when it exists. In the TUI, press `2` from the profile list and enter the JSON path.
+The import creates `~/.codexhub/profiles/<name>/`, writes a Codex-compatible `auth.json`, creates `sessions/`, and copies `~/.codex/config.toml` when it exists. In the TUI, press `n`, choose `Import JSON`, and enter the JSON path.

@@ -1,7 +1,10 @@
 use crate::profile;
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
+use std::fs::File;
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -26,8 +29,30 @@ pub struct HistorySession {
     pub updated_at: i64,
 }
 
-pub fn codex_login(name: &str) -> Result<i32> {
-    run_codex(name, ["login"])
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMethod {
+    DeviceCode,
+    Web,
+}
+
+impl LoginMethod {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::DeviceCode => &["login", "--device-auth"],
+            Self::Web => &["login"],
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DeviceCode => "device code",
+            Self::Web => "web login",
+        }
+    }
+}
+
+pub fn codex_login(name: &str, method: LoginMethod) -> Result<i32> {
+    run_codex(name, method.args().iter().copied())
 }
 
 pub fn codex_run(name: &str, args: &[String]) -> Result<i32> {
@@ -80,6 +105,31 @@ pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &st
         path,
     )?;
     codex_resume(target_profile, &session.session_id)
+}
+
+pub fn session_preview_lines(session: &HistorySession, max_lines: usize) -> Vec<String> {
+    let Some(path) = session.path.as_deref() else {
+        return vec!["No rollout file path available.".into()];
+    };
+    let Ok(file) = File::open(path) else {
+        return vec![format!("Cannot open rollout file: {path}")];
+    };
+    let reader = BufReader::new(file);
+    let mut out = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        if let Some(text) = preview_line(&line) {
+            push_wrapped_preview(&mut out, &text, 120);
+            if out.len() >= max_lines {
+                out.truncate(max_lines);
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        vec!["No user or assistant messages found in rollout.".into()]
+    } else {
+        out
+    }
 }
 
 pub fn run_codex<'a, I>(name: &str, args: I) -> Result<i32>
@@ -243,6 +293,90 @@ fn trim_preview(text: &str) -> String {
     }
 }
 
+fn preview_line(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    match value.pointer("/type").and_then(Value::as_str) {
+        Some("event_msg") => event_message_preview(&value),
+        Some("response_item") => response_item_preview(&value),
+        _ => None,
+    }
+}
+
+fn event_message_preview(value: &Value) -> Option<String> {
+    let message = value
+        .pointer("/payload/message")
+        .and_then(Value::as_str)
+        .map(clean_preview_text)?;
+    if message.is_empty() {
+        None
+    } else {
+        Some(format!("user: {message}"))
+    }
+}
+
+fn response_item_preview(value: &Value) -> Option<String> {
+    let payload = value.pointer("/payload")?;
+    if payload.pointer("/type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let role = payload.pointer("/role").and_then(Value::as_str)?;
+    if !matches!(role, "user" | "assistant") {
+        return None;
+    }
+    let text = message_content_text(payload.pointer("/content")?)?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(format!("{role}: {text}"))
+    }
+}
+
+fn message_content_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => Some(clean_preview_text(text)),
+        Value::Array(items) => {
+            let parts: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    item.pointer("/text")
+                        .or_else(|| item.pointer("/content"))
+                        .and_then(Value::as_str)
+                        .map(clean_preview_text)
+                        .filter(|text| !text.is_empty())
+                })
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+fn clean_preview_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn push_wrapped_preview(out: &mut Vec<String>, text: &str, width: usize) {
+    if text.chars().count() <= width {
+        out.push(text.to_string());
+        return;
+    }
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let next_len = current.chars().count() + usize::from(!current.is_empty()) + word.len();
+        if next_len > width && !current.is_empty() {
+            out.push(current);
+            current = String::new();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AppServerLine {
     id: Option<u64>,
@@ -329,5 +463,25 @@ mod tests {
             sessions[1].path.as_deref(),
             Some("/tmp/source/sessions/rollout-s1.jsonl")
         );
+    }
+
+    #[test]
+    fn extracts_rollout_preview_from_user_and_assistant_messages() {
+        let user = r#"{"type":"event_msg","payload":{"type":"user_message","message":"hello from user","images":[]}}"#;
+        let assistant = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from assistant"}]}}"#;
+        let developer = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hidden"}]}}"#;
+
+        assert_eq!(preview_line(user).as_deref(), Some("user: hello from user"));
+        assert_eq!(
+            preview_line(assistant).as_deref(),
+            Some("assistant: hello from assistant")
+        );
+        assert_eq!(preview_line(developer), None);
+    }
+
+    #[test]
+    fn maps_login_methods_to_codex_args() {
+        assert_eq!(LoginMethod::DeviceCode.args(), &["login", "--device-auth"]);
+        assert_eq!(LoginMethod::Web.args(), &["login"]);
     }
 }

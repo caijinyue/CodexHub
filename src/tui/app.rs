@@ -23,6 +23,7 @@ pub struct App {
     pub history_cwd: Option<PathBuf>,
     pub selected_history: usize,
     pub selected_continue_profile: usize,
+    pub pending_login_method: Option<process::LoginMethod>,
     pub update_info: Option<update::UpdateInfo>,
     pub status_loading: bool,
     pub history_loading: bool,
@@ -55,6 +56,7 @@ impl App {
             history_cwd: std::env::current_dir().ok(),
             selected_history: 0,
             selected_continue_profile: 0,
+            pending_login_method: None,
             update_info: None,
             status_loading: false,
             history_loading: false,
@@ -252,13 +254,13 @@ impl App {
 
     pub fn activate_current_profile(&mut self) -> Result<()> {
         let Some(name) = self.current_name() else {
-            self.set_message("No profile selected");
+            self.set_message("No account selected");
             return Ok(());
         };
         let result = crate::activation::activate_profile(&name)?;
         self.active_profile = Some(name.clone());
         self.set_message(format!(
-            "Activated {name}\nCODEX_HOME={}\nRestart Codex Desktop if it is already running.",
+            "Activated account {name}\nCODEX_HOME={}\nRestart Codex Desktop if it is already running.",
             result.profile_path.display()
         ));
         Ok(())
