@@ -20,7 +20,7 @@ pub struct UpdateInfo {
 
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
     let repo_path = repo_path();
-    let local_head = git_output(&repo_path, &["rev-parse", "HEAD"])?;
+    let local_head = local_build_head(&repo_path)?;
     let remote_ref = update_remote_ref(&repo_path)?;
     let refspec = format!(
         "+refs/heads/{}:refs/remotes/{}/{}",
@@ -62,6 +62,14 @@ pub fn install_update(repo_path: &Path) -> Result<()> {
 
 fn repo_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn local_build_head(repo_path: &Path) -> Result<String> {
+    option_env!("CODEXHUB_BUILD_GIT_HEAD")
+        .filter(|head| !head.trim().is_empty())
+        .map(|head| head.trim().to_string())
+        .map(Ok)
+        .unwrap_or_else(|| git_output(repo_path, &["rev-parse", "HEAD"]))
 }
 
 fn git_output(repo_path: &Path, args: &[&str]) -> Result<String> {
@@ -233,6 +241,14 @@ mod tests {
         assert_eq!(
             classify_heads("abc", "def", false),
             UpdateState::NotFastForward
+        );
+    }
+
+    #[test]
+    fn uses_compiled_git_head_for_local_update_state() {
+        assert_eq!(
+            local_build_head(Path::new("/does/not/matter")).unwrap(),
+            env!("CODEXHUB_BUILD_GIT_HEAD").to_string()
         );
     }
 }
