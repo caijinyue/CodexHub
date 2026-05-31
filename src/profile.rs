@@ -402,46 +402,8 @@ fn plan_expires_at(value: &Value) -> Option<DateTime<Local>> {
     value
         .pointer("/plan_expires_at")
         .and_then(Value::as_i64)
-        .or_else(|| {
-            value
-                .pointer("/tokens/access_token")
-                .and_then(Value::as_str)
-                .and_then(jwt_exp)
-        })
         .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
         .map(DateTime::<Local>::from)
-}
-
-fn jwt_exp(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let decoded = decode_base64_url(payload)?;
-    let value: Value = serde_json::from_slice(&decoded).ok()?;
-    value.pointer("/exp").and_then(Value::as_i64)
-}
-
-fn decode_base64_url(input: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut buffer = 0u32;
-    let mut bits = 0u8;
-    for byte in input.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            b'=' => break,
-            _ => return None,
-        } as u32;
-        buffer = (buffer << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buffer >> bits) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
 }
 
 fn logs_size(path: &std::path::Path) -> Result<u64> {
@@ -647,16 +609,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_plan_expiry_from_access_token_exp_fallback() {
+    fn ignores_access_token_exp_for_plan_expiry() {
         let value = json!({
             "tokens": {
                 "access_token": "header.eyJleHAiOjE3ODA3MTY2MTZ9.signature"
             }
         });
 
-        let expires = plan_expires_at(&value).unwrap();
-
-        assert_eq!(expires.timestamp(), 1780716616);
+        assert!(plan_expires_at(&value).is_none());
     }
 
     #[test]

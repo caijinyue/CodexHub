@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{doctor, process, profile, update};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -16,7 +17,10 @@ pub struct App {
     pub input: String,
     pub message: String,
     pub doctor_checks: Vec<doctor::Check>,
+    all_history_sessions: Vec<process::HistorySession>,
     pub history_sessions: Vec<process::HistorySession>,
+    pub history_all_paths: bool,
+    pub history_cwd: Option<PathBuf>,
     pub selected_history: usize,
     pub selected_continue_profile: usize,
     pub update_info: Option<update::UpdateInfo>,
@@ -45,7 +49,10 @@ impl App {
             input: String::new(),
             message: String::new(),
             doctor_checks: Vec::new(),
+            all_history_sessions: Vec::new(),
             history_sessions: Vec::new(),
+            history_all_paths: false,
+            history_cwd: std::env::current_dir().ok(),
             selected_history: 0,
             selected_continue_profile: 0,
             update_info: None,
@@ -102,6 +109,19 @@ impl App {
         self.history_sessions.get(self.selected_history).cloned()
     }
 
+    pub fn toggle_history_path_scope(&mut self) {
+        self.history_all_paths = !self.history_all_paths;
+        self.apply_history_filter();
+    }
+
+    pub fn history_scope_label(&self) -> &'static str {
+        if self.history_all_paths {
+            "all paths"
+        } else {
+            "current path"
+        }
+    }
+
     pub fn current_continue_profile_name(&self) -> Option<String> {
         self.profiles
             .get(self.selected_continue_profile)
@@ -146,10 +166,8 @@ impl App {
         if let Some(rx) = self.history_rx.take() {
             match rx.try_recv() {
                 Ok(sessions) => {
-                    self.history_sessions = sessions;
-                    self.selected_history = self
-                        .selected_history
-                        .min(self.history_sessions.len().saturating_sub(1));
+                    self.all_history_sessions = sessions;
+                    self.apply_history_filter();
                     self.history_loading = false;
                 }
                 Err(mpsc::TryRecvError::Empty) => self.history_rx = Some(rx),
@@ -201,6 +219,17 @@ impl App {
             let sessions = all_history_sessions(names);
             let _ = tx.send(sessions);
         });
+    }
+
+    fn apply_history_filter(&mut self) {
+        self.history_sessions = filter_history_sessions(
+            &self.all_history_sessions,
+            self.history_all_paths,
+            self.history_cwd.as_deref(),
+        );
+        self.selected_history = self
+            .selected_history
+            .min(self.history_sessions.len().saturating_sub(1));
     }
 
     pub fn start_update_check(&mut self) {
@@ -301,4 +330,90 @@ fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
         .collect();
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     sessions
+}
+
+fn filter_history_sessions(
+    sessions: &[process::HistorySession],
+    all_paths: bool,
+    current_dir: Option<&Path>,
+) -> Vec<process::HistorySession> {
+    if all_paths {
+        return sessions.to_vec();
+    }
+    let Some(current_dir) = current_dir else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter(|session| {
+            session
+                .cwd
+                .as_deref()
+                .map(|cwd| cwd_matches_current_path(cwd, current_dir))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+fn cwd_matches_current_path(cwd: &str, current_dir: &Path) -> bool {
+    let cwd = Path::new(cwd);
+    if cwd == current_dir {
+        return true;
+    }
+    match (cwd.canonicalize(), current_dir.canonicalize()) {
+        (Ok(cwd), Ok(current_dir)) => cwd == current_dir,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_history_to_current_path_by_default() {
+        let sessions = vec![
+            history_session("current", Some("/repo"), 200),
+            history_session("other", Some("/other"), 300),
+            history_session("unknown", None, 400),
+        ];
+
+        let filtered =
+            filter_history_sessions(&sessions, false, Some(std::path::Path::new("/repo")));
+
+        let ids: Vec<_> = filtered
+            .into_iter()
+            .map(|session| session.session_id)
+            .collect();
+        assert_eq!(ids, vec!["current"]);
+    }
+
+    #[test]
+    fn shows_all_history_paths_when_scope_is_all() {
+        let sessions = vec![
+            history_session("current", Some("/repo"), 200),
+            history_session("other", Some("/other"), 300),
+        ];
+
+        let filtered =
+            filter_history_sessions(&sessions, true, Some(std::path::Path::new("/repo")));
+
+        let ids: Vec<_> = filtered
+            .into_iter()
+            .map(|session| session.session_id)
+            .collect();
+        assert_eq!(ids, vec!["current", "other"]);
+    }
+
+    fn history_session(id: &str, cwd: Option<&str>, updated_at: i64) -> process::HistorySession {
+        process::HistorySession {
+            profile: "work".into(),
+            session_id: id.into(),
+            title: id.into(),
+            cwd: cwd.map(str::to_string),
+            path: None,
+            updated_at,
+        }
+    }
 }

@@ -87,7 +87,7 @@ codexhub
 
 [Doctor Screenshot]
 
-The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the account expiration date when available. Profiles are sorted from earliest expiration to latest expiration, with unknown expirations last.
+The profile list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining 5h and 7day quota percentages, and the membership expiration date when available. Profiles are sorted from earliest membership expiration to latest membership expiration, with unknown expirations last.
 
 The TUI uses the terminal's light/dark preference when it can detect one. Press `t` to cycle the saved theme preference through `auto`, `light`, and `dark`. You can also force a theme for one run with `CODEXHUB_THEME=light` or `CODEXHUB_THEME=dark`.
 
@@ -95,7 +95,7 @@ Press `a` from the profile list or detail screen to activate the selected profil
 
 CodexHub checks GitHub for updates in the background when the TUI starts. If the remote repository has a newer commit, it shows an update prompt. Press `Enter` or `y` to run `git pull --ff-only` and `cargo install --path .`, or press `n`/`Esc` to skip.
 
-Press `h` from the profile list to show resume sessions across all profiles. The history screen also loads in the background and supports scrolling through the merged session list. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
+Press `h` from the profile list to show resume sessions across all profiles. The history screen also loads in the background and supports scrolling through the merged session list. By default, it shows sessions whose CWD matches the directory where CodexHub was started; press `a` to toggle between current-path sessions and all paths. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. Press `Enter` on a row to run `codex resume` with that profile and session.
 
 If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, choose the target profile from the popup list, and press `Enter`. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
 

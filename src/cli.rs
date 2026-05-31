@@ -151,7 +151,7 @@ fn print_list() -> Result<()> {
         "PLAN",
         "5H",
         "7DAY",
-        "EXPIRES",
+        "MEMBER",
         "AUTH MTIME",
         "SESSIONS",
         "LOGS",

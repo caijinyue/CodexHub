@@ -229,7 +229,7 @@ fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, 
             ),
             Span::styled("  Plan ", Style::default().fg(app.theme.muted)),
             Span::styled(plan, Style::default().fg(app.theme.text)),
-            Span::styled("  Expires ", Style::default().fg(app.theme.muted)),
+            Span::styled("  Member ", Style::default().fg(app.theme.muted)),
             Span::styled(
                 expiry(profile.plan_expires_at),
                 Style::default().fg(app.theme.text),
@@ -398,6 +398,7 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                 &[
                     ("Enter", "resume"),
                     ("c", "continue as"),
+                    ("a", "all/current"),
                     ("r", "refresh"),
                     ("b", "back"),
                 ],
@@ -446,13 +447,13 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .style(style)
         });
     let title = if app.history_loading {
-        "Sessions (loading...)"
+        format!("Sessions: {} (loading...)", app.history_scope_label())
     } else {
-        "Sessions"
+        format!("Sessions: {}", app.history_scope_label())
     };
     frame.render_widget(
         List::new(items)
-            .block(widgets::block(title, app.theme))
+            .block(widgets::block(&title, app.theme))
             .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
         area,
     );
@@ -643,7 +644,7 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
         ],
     )
     .header(
-        Row::new(["Profile", "State", "5h", "7day", "Expires"])
+        Row::new(["Profile", "State", "5h", "7day", "Member"])
             .style(widgets::header_style(app.theme)),
     )
     .block(widgets::block("Continue With Profile", app.theme))

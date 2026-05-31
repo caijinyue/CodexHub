@@ -122,6 +122,7 @@ fn handle_history(
         KeyCode::Char('t') => app.cycle_theme()?,
         KeyCode::Down | KeyCode::Char('j') => app.move_history_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_history_up(),
+        KeyCode::Char('a') => app.toggle_history_path_scope(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,
         KeyCode::Char('c') => start_continue_profile_select(app),
         KeyCode::Enter => external_resume(terminal, app)?,
