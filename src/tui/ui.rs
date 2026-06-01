@@ -17,6 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         Screen::List => draw_profile_workspace(frame, app),
         Screen::Doctor => draw_doctor(frame, app),
         Screen::History => draw_history(frame, app),
+        Screen::Settings => draw_settings(frame, app),
     }
     if app.input_mode != InputMode::None {
         draw_popup(frame, app);
@@ -63,6 +64,7 @@ fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
                 &[
                     ("h", "history"),
                     ("r", "refresh"),
+                    ("s", "settings"),
                     ("t", "theme"),
                     ("D", "doctor"),
                     ("q", "quit"),
@@ -180,7 +182,7 @@ fn draw_profile_main(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(7),
-            Constraint::Length(7),
+            Constraint::Length(9),
             Constraint::Min(8),
         ])
         .split(area);
@@ -227,6 +229,11 @@ fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, 
                 expiry(profile.plan_expires_at),
                 Style::default().fg(app.theme.text),
             ),
+            Span::styled("  Used ", Style::default().fg(app.theme.muted)),
+            Span::styled(
+                used_days(profile.used_since),
+                Style::default().fg(app.theme.text),
+            ),
         ]),
         Line::from(Span::styled(
             profile.path.display().to_string(),
@@ -242,18 +249,24 @@ fn draw_profile_header(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, 
 }
 
 fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, area: Rect) {
+    let inner = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(1),
-        ])
-        .split(area);
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(inner);
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title("📊 Quota")
+            .title(if app.status_loading {
+                "📊 Quota refreshing"
+            } else {
+                "📊 Quota"
+            })
             .border_style(Style::default().fg(app.theme.border))
             .style(Style::default().bg(app.theme.panel)),
         area,
@@ -284,27 +297,54 @@ fn draw_gauge(
     value: Option<u8>,
     resets_at: Option<chrono::DateTime<chrono::Local>>,
 ) {
-    let value = value.unwrap_or(0).min(100);
-    let gauge_area = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y,
-        width: area.width.saturating_sub(4),
-        height: area.height,
-    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let value_text = value.map(|value| format!("{value}%")).unwrap_or_else(|| {
+        if app.status_loading {
+            "loading".into()
+        } else {
+            "-".into()
+        }
+    });
+    let reset_text = resets_at
+        .map(|value| format!("resets {}", reset_time(Some(value))))
+        .unwrap_or_else(|| "resets -".into());
+    let title = Line::from(vec![
+        Span::styled(
+            format!("{label:<5}"),
+            Style::default()
+                .fg(app.theme.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            value_text,
+            Style::default()
+                .fg(app.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(reset_text, Style::default().fg(app.theme.muted)),
+    ]);
+    frame.render_widget(Paragraph::new(title), rows[0]);
+    let value = value.map(|value| value.min(100));
+    let ratio = value.map(|value| f64::from(value) / 100.0).unwrap_or(0.0);
+    let color = value
+        .map(|value| quota_color(app, value))
+        .unwrap_or(app.theme.muted);
     frame.render_widget(
-        Gauge::default()
-            .label(format!(
-                "{label} remaining {value}%  reset {}",
-                reset_time(resets_at)
-            ))
-            .ratio(f64::from(value) / 100.0)
-            .gauge_style(
-                Style::default()
-                    .fg(quota_color(app, value))
-                    .bg(app.theme.surface)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        gauge_area,
+        Gauge::default().label("").ratio(ratio).gauge_style(
+            Style::default()
+                .fg(color)
+                .bg(app.theme.surface)
+                .add_modifier(Modifier::BOLD),
+        ),
+        rows[1],
     );
 }
 
@@ -325,6 +365,8 @@ fn draw_profile_details(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo,
         detail_row("Logs", size::human(profile.logs_size)),
         detail_row("Total", size::human(profile.total_size)),
         detail_row("Shared cache", bool_label(profile.shared_cache)),
+        detail_row("Used", used_days(profile.used_since)),
+        detail_row("Member", expiry(profile.plan_expires_at)),
         detail_row("Update check", update_detail_status(app)),
         detail_row(
             "Auth updated",
@@ -413,6 +455,40 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                 ],
             ),
             ("System", &[("r", "refresh"), ("t", "theme"), ("q", "back")]),
+        ],
+    );
+}
+
+fn draw_settings(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(3)])
+        .split(area);
+    let rows = vec![
+        detail_row("Theme", app.theme_label()),
+        detail_row("Quota refresh", app.quota_refresh_label()),
+        detail_row(
+            "Refresh state",
+            if app.status_loading {
+                "refreshing".to_string()
+            } else {
+                "idle".to_string()
+            },
+        ),
+    ];
+    let table = Table::new(rows, [Constraint::Length(18), Constraint::Min(24)])
+        .block(widgets::block("⚙ Settings", app.theme))
+        .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+        .column_spacing(2);
+    frame.render_widget(table, chunks[0]);
+    draw_footer(
+        frame,
+        app,
+        chunks[1],
+        &[
+            ("Refresh", &[("+/-", "interval"), ("r", "refresh now")]),
+            ("System", &[("t", "theme"), ("q", "back")]),
         ],
     );
 }
@@ -842,6 +918,18 @@ fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
     value
         .map(|value| value.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "-".into())
+}
+
+fn used_days(value: Option<chrono::DateTime<chrono::Local>>) -> String {
+    let Some(value) = value else {
+        return "-".into();
+    };
+    let days = (chrono::Local::now() - value).num_days().max(0);
+    if days == 1 {
+        "1 day".into()
+    } else {
+        format!("{days} days")
+    }
 }
 
 fn reset_time(value: Option<chrono::DateTime<chrono::Local>>) -> String {

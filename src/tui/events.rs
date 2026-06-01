@@ -38,6 +38,7 @@ fn handle_key(
         Screen::List => handle_list(terminal, app, key),
         Screen::Doctor => handle_doctor(app, key),
         Screen::History => handle_history(terminal, app, key),
+        Screen::Settings => handle_settings(app, key),
     }
 }
 
@@ -56,6 +57,7 @@ fn handle_list(
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => start_input(app, InputMode::LoginMethodForSelected),
         KeyCode::Char('r') => app.refresh_profiles()?,
+        KeyCode::Char('s') => app.screen = Screen::Settings,
         KeyCode::Char('o') => external_open(terminal, app)?,
         KeyCode::Char('h') => {
             app.refresh_history_sessions()?;
@@ -65,6 +67,22 @@ fn handle_list(
             app.doctor_checks = crate::doctor::run(false)?;
             app.screen = Screen::Doctor;
         }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_settings(app: &mut App, key: KeyEvent) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
+        KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right | KeyCode::Up => {
+            app.increase_quota_refresh_interval()?;
+        }
+        KeyCode::Char('-') | KeyCode::Left | KeyCode::Down => {
+            app.decrease_quota_refresh_interval()?;
+        }
+        KeyCode::Char('r') => app.start_status_refresh(),
         _ => {}
     }
     Ok(false)

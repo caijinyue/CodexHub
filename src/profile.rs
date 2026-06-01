@@ -20,6 +20,7 @@ pub struct ProfileInfo {
     pub limit_5h_resets_at: Option<DateTime<Local>>,
     pub limit_7day_resets_at: Option<DateTime<Local>>,
     pub plan_expires_at: Option<DateTime<Local>>,
+    pub used_since: Option<DateTime<Local>>,
     pub sessions_size: u64,
     pub logs_size: u64,
     pub total_size: u64,
@@ -369,6 +370,10 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
         .and_then(|m| m.modified())
         .ok()
         .map(DateTime::<Local>::from);
+    let used_since = fs::metadata(&auth)
+        .and_then(|m| m.created().or_else(|_| m.modified()))
+        .ok()
+        .map(DateTime::<Local>::from);
     let plan_type = auth_json
         .as_ref()
         .and_then(|value| value.pointer("/plan_type"))
@@ -394,6 +399,7 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
         limit_5h_resets_at: None,
         limit_7day_resets_at: None,
         plan_expires_at,
+        used_since,
         sessions_size,
         logs_size,
         total_size,
@@ -419,11 +425,26 @@ fn read_auth_json(path: &Path) -> Option<Value> {
 }
 
 fn plan_expires_at(value: &Value) -> Option<DateTime<Local>> {
-    value
-        .pointer("/plan_expires_at")
-        .and_then(Value::as_i64)
-        .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
+    [
+        "/plan_expires_at",
+        "/expires_at",
+        "/account/plan_expires_at",
+        "/account/expires_at",
+        "/tokens/plan_expires_at",
+    ]
+    .into_iter()
+    .filter_map(|path| value.pointer(path))
+    .find_map(datetime_from_value)
+}
+
+fn datetime_from_value(value: &Value) -> Option<DateTime<Local>> {
+    if let Some(timestamp) = value.as_i64() {
+        return DateTime::<chrono::Utc>::from_timestamp(timestamp, 0).map(DateTime::<Local>::from);
+    }
+    let text = value.as_str()?;
+    DateTime::parse_from_rfc3339(text)
         .map(DateTime::<Local>::from)
+        .ok()
 }
 
 fn logs_size(path: &std::path::Path) -> Result<u64> {
@@ -695,6 +716,7 @@ mod tests {
             plan_expires_at: expiry
                 .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
                 .map(DateTime::<Local>::from),
+            used_since: None,
             sessions_size: 0,
             logs_size: 0,
             total_size: 0,

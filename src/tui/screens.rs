@@ -3,6 +3,7 @@ pub enum Screen {
     List,
     Doctor,
     History,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

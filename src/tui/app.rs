@@ -7,6 +7,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 
 pub struct App {
     pub screen: Screen,
@@ -29,6 +30,8 @@ pub struct App {
     pub status_loading: bool,
     pub history_loading: bool,
     pub update_checking: bool,
+    pub quota_refresh_secs: u64,
+    last_status_refresh: Option<Instant>,
     pub theme: Theme,
     pub theme_preference: ThemePreference,
     status_rx: Option<Receiver<Vec<(String, process::AccountStatus)>>>,
@@ -39,6 +42,7 @@ pub struct App {
 impl App {
     pub fn new() -> Result<Self> {
         crate::config::init()?;
+        let config = crate::config::load()?;
         let profiles = profile::list()?;
         let active_profile = crate::activation::active_profile_name()?;
         let theme_preference = load_theme_preference();
@@ -63,6 +67,8 @@ impl App {
             status_loading: false,
             history_loading: false,
             update_checking: false,
+            quota_refresh_secs: config.quota_refresh_secs,
+            last_status_refresh: None,
             theme: Theme::from_preference(theme_preference),
             theme_preference,
             status_rx: None,
@@ -150,6 +156,7 @@ impl App {
     }
 
     pub fn poll_background(&mut self) {
+        self.maybe_auto_refresh_status();
         if let Some(rx) = self.status_rx.take() {
             match rx.try_recv() {
                 Ok(statuses) => {
@@ -204,6 +211,9 @@ impl App {
     }
 
     pub fn start_status_refresh(&mut self) {
+        if self.status_loading {
+            return;
+        }
         let names: Vec<_> = self
             .profiles
             .iter()
@@ -212,6 +222,7 @@ impl App {
             .collect();
         let (tx, rx) = mpsc::channel();
         self.status_loading = true;
+        self.last_status_refresh = Some(Instant::now());
         self.status_rx = Some(rx);
         thread::spawn(move || {
             let statuses = account_statuses(names);
@@ -284,6 +295,49 @@ impl App {
         self.theme = Theme::from_preference(self.theme_preference);
         save_theme_preference(self.theme_preference)?;
         Ok(())
+    }
+
+    pub fn increase_quota_refresh_interval(&mut self) -> Result<()> {
+        self.quota_refresh_secs = (self.quota_refresh_secs + 15).min(3600);
+        self.save_settings()
+    }
+
+    pub fn decrease_quota_refresh_interval(&mut self) -> Result<()> {
+        self.quota_refresh_secs = self.quota_refresh_secs.saturating_sub(15).max(15);
+        self.save_settings()
+    }
+
+    pub fn quota_refresh_label(&self) -> String {
+        if self.quota_refresh_secs < 60 {
+            format!("{}s", self.quota_refresh_secs)
+        } else if self.quota_refresh_secs % 60 == 0 {
+            format!("{}m", self.quota_refresh_secs / 60)
+        } else {
+            format!(
+                "{}m {}s",
+                self.quota_refresh_secs / 60,
+                self.quota_refresh_secs % 60
+            )
+        }
+    }
+
+    fn maybe_auto_refresh_status(&mut self) {
+        if self.status_loading || self.quota_refresh_secs == 0 {
+            return;
+        }
+        let Some(last) = self.last_status_refresh else {
+            self.start_status_refresh();
+            return;
+        };
+        if last.elapsed() >= Duration::from_secs(self.quota_refresh_secs) {
+            self.start_status_refresh();
+        }
+    }
+
+    fn save_settings(&self) -> Result<()> {
+        let mut config = crate::config::load()?;
+        config.quota_refresh_secs = self.quota_refresh_secs;
+        crate::config::save(&config)
     }
 
     pub fn theme_label(&self) -> String {

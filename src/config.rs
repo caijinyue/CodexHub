@@ -18,6 +18,8 @@ pub struct Paths {
 pub struct Config {
     pub version: u32,
     pub shared_cache: Vec<String>,
+    #[serde(default = "default_quota_refresh_secs")]
+    pub quota_refresh_secs: u64,
 }
 
 impl Default for Config {
@@ -28,8 +30,13 @@ impl Default for Config {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
+            quota_refresh_secs: default_quota_refresh_secs(),
         }
     }
+}
+
+pub fn default_quota_refresh_secs() -> u64 {
+    60
 }
 
 pub fn paths() -> Result<Paths> {
@@ -72,6 +79,22 @@ pub fn init() -> Result<Paths> {
         fs::write(&paths.config, data).context("Writing config.toml")?;
     }
     Ok(paths)
+}
+
+pub fn load() -> Result<Config> {
+    let paths = init()?;
+    let data = fs::read_to_string(&paths.config).context("Reading config.toml")?;
+    let mut config: Config = toml::from_str(&data).context("Parsing config.toml")?;
+    if config.quota_refresh_secs == 0 {
+        config.quota_refresh_secs = default_quota_refresh_secs();
+    }
+    Ok(config)
+}
+
+pub fn save(config: &Config) -> Result<()> {
+    let paths = init()?;
+    let data = toml::to_string_pretty(config)?;
+    fs::write(&paths.config, data).context("Writing config.toml")
 }
 
 pub fn expand_tilde(path: PathBuf) -> PathBuf {
