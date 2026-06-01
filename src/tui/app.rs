@@ -91,6 +91,17 @@ impl App {
         Ok(())
     }
 
+    pub fn refresh_profiles_now(&mut self) -> Result<()> {
+        self.profiles = profile::list()?;
+        self.active_profile = crate::activation::active_profile_name()?;
+        if self.selected >= self.profiles.len() {
+            self.selected = self.profiles.len().saturating_sub(1);
+        }
+        self.force_status_refresh();
+        self.start_update_check();
+        Ok(())
+    }
+
     pub fn current_name(&self) -> Option<String> {
         self.profiles.get(self.selected).map(|p| p.name.clone())
     }
@@ -214,6 +225,16 @@ impl App {
         if self.status_loading {
             return;
         }
+        self.spawn_status_refresh();
+    }
+
+    pub fn force_status_refresh(&mut self) {
+        self.status_rx = None;
+        self.status_loading = false;
+        self.spawn_status_refresh();
+    }
+
+    fn spawn_status_refresh(&mut self) {
         let names: Vec<_> = self
             .profiles
             .iter()

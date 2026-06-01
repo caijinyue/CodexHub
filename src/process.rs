@@ -3,10 +3,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs::File;
-use std::io::Write;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -236,21 +236,46 @@ fn app_server_request_home(
         .with_context(|| "Failed to start official codex app-server")?;
 
     let mut stdin = child.stdin.take().context("Opening app-server stdin")?;
+    let stdout = child.stdout.take().context("Opening app-server stdout")?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        let mut out = String::new();
+        for line in reader.lines().map_while(Result::ok) {
+            out.push_str(&line);
+            out.push('\n');
+            if response_has_id(&line, request_id) {
+                let _ = tx.send(out);
+                return;
+            }
+        }
+        let _ = tx.send(out);
+    });
     writeln!(
         stdin,
         r#"{{"id":1,"method":"initialize","params":{{"clientInfo":{{"name":"codexhub","title":"CodexHub","version":"{}"}},"capabilities":{{"experimentalApi":true,"requestAttestation":false}}}}}}"#,
         env!("CARGO_PKG_VERSION")
     )?;
-    thread::sleep(Duration::from_millis(500));
     writeln!(stdin, "{request}")?;
-    thread::sleep(Duration::from_secs(if request_id == 2 { 4 } else { 3 }));
     drop(stdin);
+    let timeout = if request_id == 2 {
+        Duration::from_secs(8)
+    } else {
+        Duration::from_secs(6)
+    };
+    let out = rx
+        .recv_timeout(timeout)
+        .with_context(|| format!("Timed out waiting for app-server response {request_id}"))?;
     let _ = child.kill();
+    let _ = child.wait();
+    Ok(out)
+}
 
-    let out = child
-        .wait_with_output()
-        .with_context(|| "Reading codex app-server output")?;
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+fn response_has_id(line: &str, request_id: u64) -> bool {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.pointer("/id").and_then(Value::as_u64))
+        == Some(request_id)
 }
 
 fn parse_account_status(text: &str) -> Option<AccountStatus> {

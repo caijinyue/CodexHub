@@ -56,7 +56,7 @@ fn handle_list(
         KeyCode::Char('n') => start_input(app, InputMode::AddAccountMethod),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => start_input(app, InputMode::LoginMethodForSelected),
-        KeyCode::Char('r') => app.refresh_profiles()?,
+        KeyCode::Char('r') => app.refresh_profiles_now()?,
         KeyCode::Char('s') => app.screen = Screen::Settings,
         KeyCode::Char('o') => external_open(terminal, app)?,
         KeyCode::Char('h') => {
@@ -82,7 +82,7 @@ fn handle_settings(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Char('-') | KeyCode::Left | KeyCode::Down => {
             app.decrease_quota_refresh_interval()?;
         }
-        KeyCode::Char('r') => app.start_status_refresh(),
+        KeyCode::Char('r') => app.force_status_refresh(),
         _ => {}
     }
     Ok(false)
