@@ -240,35 +240,45 @@ fn app_server_request_home(
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        let mut out = String::new();
         for line in reader.lines().map_while(Result::ok) {
-            out.push_str(&line);
-            out.push('\n');
-            if response_has_id(&line, request_id) {
-                let _ = tx.send(out);
-                return;
-            }
+            let _ = tx.send(line);
         }
-        let _ = tx.send(out);
     });
     writeln!(
         stdin,
         r#"{{"id":1,"method":"initialize","params":{{"clientInfo":{{"name":"codexhub","title":"CodexHub","version":"{}"}},"capabilities":{{"experimentalApi":true,"requestAttestation":false}}}}}}"#,
         env!("CARGO_PKG_VERSION")
     )?;
+    let mut out = wait_for_app_server_response(&rx, 1, Duration::from_secs(6))?;
     writeln!(stdin, "{request}")?;
-    drop(stdin);
     let timeout = if request_id == 2 {
         Duration::from_secs(8)
     } else {
         Duration::from_secs(6)
     };
-    let out = rx
-        .recv_timeout(timeout)
-        .with_context(|| format!("Timed out waiting for app-server response {request_id}"))?;
+    out.push_str(&wait_for_app_server_response(&rx, request_id, timeout)?);
+    drop(stdin);
     let _ = child.kill();
     let _ = child.wait();
     Ok(out)
+}
+
+fn wait_for_app_server_response(
+    rx: &mpsc::Receiver<String>,
+    request_id: u64,
+    timeout: Duration,
+) -> Result<String> {
+    let mut out = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(timeout)
+            .with_context(|| format!("Timed out waiting for app-server response {request_id}"))?;
+        out.push_str(&line);
+        out.push('\n');
+        if response_has_id(&line, request_id) {
+            return Ok(out);
+        }
+    }
 }
 
 fn response_has_id(line: &str, request_id: u64) -> bool {

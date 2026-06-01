@@ -81,7 +81,9 @@ impl App {
     }
 
     pub fn refresh_profiles(&mut self) -> Result<()> {
+        let previous = self.profiles.clone();
         self.profiles = profile::list()?;
+        preserve_account_status(&mut self.profiles, &previous);
         self.active_profile = crate::activation::active_profile_name()?;
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len().saturating_sub(1);
@@ -92,7 +94,9 @@ impl App {
     }
 
     pub fn refresh_profiles_now(&mut self) -> Result<()> {
+        let previous = self.profiles.clone();
         self.profiles = profile::list()?;
+        preserve_account_status(&mut self.profiles, &previous);
         self.active_profile = crate::activation::active_profile_name()?;
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len().saturating_sub(1);
@@ -404,6 +408,22 @@ fn account_statuses(names: Vec<String>) -> Vec<(String, process::AccountStatus)>
         .into_iter()
         .filter_map(|handle| handle.join().ok().flatten())
         .collect()
+}
+
+fn preserve_account_status(
+    profiles: &mut [profile::ProfileInfo],
+    previous: &[profile::ProfileInfo],
+) {
+    for profile in profiles {
+        let Some(old) = previous.iter().find(|old| old.name == profile.name) else {
+            continue;
+        };
+        profile.plan_type = profile.plan_type.clone().or_else(|| old.plan_type.clone());
+        profile.limit_5h_remaining = old.limit_5h_remaining;
+        profile.limit_7day_remaining = old.limit_7day_remaining;
+        profile.limit_5h_resets_at = old.limit_5h_resets_at;
+        profile.limit_7day_resets_at = old.limit_7day_resets_at;
+    }
 }
 
 fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
