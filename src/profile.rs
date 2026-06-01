@@ -17,6 +17,8 @@ pub struct ProfileInfo {
     pub plan_type: Option<String>,
     pub limit_5h_remaining: Option<u8>,
     pub limit_7day_remaining: Option<u8>,
+    pub limit_5h_resets_at: Option<DateTime<Local>>,
+    pub limit_7day_resets_at: Option<DateTime<Local>>,
     pub plan_expires_at: Option<DateTime<Local>>,
     pub sessions_size: u64,
     pub logs_size: u64,
@@ -31,6 +33,8 @@ impl ProfileInfo {
         }
         self.limit_5h_remaining = status.primary_remaining_percent;
         self.limit_7day_remaining = status.secondary_remaining_percent;
+        self.limit_5h_resets_at = status.primary_resets_at;
+        self.limit_7day_resets_at = status.secondary_resets_at;
     }
 }
 
@@ -387,6 +391,8 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
         plan_type,
         limit_5h_remaining: None,
         limit_7day_remaining: None,
+        limit_5h_resets_at: None,
+        limit_7day_resets_at: None,
         plan_expires_at,
         sessions_size,
         logs_size,
@@ -684,6 +690,8 @@ mod tests {
             plan_type: None,
             limit_5h_remaining: None,
             limit_7day_remaining: None,
+            limit_5h_resets_at: None,
+            limit_7day_resets_at: None,
             plan_expires_at: expiry
                 .and_then(|ts| DateTime::<chrono::Utc>::from_timestamp(ts, 0))
                 .map(DateTime::<Local>::from),

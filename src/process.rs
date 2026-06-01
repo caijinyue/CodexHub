@@ -15,6 +15,8 @@ pub struct AccountStatus {
     pub plan_type: Option<String>,
     pub primary_remaining_percent: Option<u8>,
     pub secondary_remaining_percent: Option<u8>,
+    pub primary_resets_at: Option<chrono::DateTime<chrono::Local>>,
+    pub secondary_resets_at: Option<chrono::DateTime<chrono::Local>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,10 +265,20 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
                 plan_type: limits.plan_type,
                 primary_remaining_percent: limits
                     .primary
+                    .as_ref()
                     .and_then(|w| remaining_percent(w.used_percent)),
                 secondary_remaining_percent: limits
                     .secondary
+                    .as_ref()
                     .and_then(|w| remaining_percent(w.used_percent)),
+                primary_resets_at: limits
+                    .primary
+                    .as_ref()
+                    .and_then(|w| reset_time(w.resets_at)),
+                secondary_resets_at: limits
+                    .secondary
+                    .as_ref()
+                    .and_then(|w| reset_time(w.resets_at)),
             });
         }
     }
@@ -275,6 +287,12 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
 
 fn remaining_percent(used_percent: u8) -> Option<u8> {
     Some(100u8.saturating_sub(used_percent.min(100)))
+}
+
+fn reset_time(timestamp: Option<i64>) -> Option<chrono::DateTime<chrono::Local>> {
+    timestamp
+        .and_then(|timestamp| chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0))
+        .map(chrono::DateTime::<chrono::Local>::from)
 }
 
 fn parse_history_sessions(
@@ -467,6 +485,8 @@ struct RateLimitSnapshot {
 struct RateLimitWindow {
     #[serde(rename = "usedPercent")]
     used_percent: u8,
+    #[serde(rename = "resetsAt")]
+    resets_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -507,6 +527,14 @@ mod tests {
         assert_eq!(status.plan_type.as_deref(), Some("plus"));
         assert_eq!(status.primary_remaining_percent, Some(99));
         assert_eq!(status.secondary_remaining_percent, Some(81));
+        assert_eq!(
+            status.primary_resets_at.map(|value| value.timestamp()),
+            Some(1779973549)
+        );
+        assert_eq!(
+            status.secondary_resets_at.map(|value| value.timestamp()),
+            Some(1780484441)
+        );
     }
 
     #[test]

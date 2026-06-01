@@ -258,11 +258,32 @@ fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, are
             .style(Style::default().bg(app.theme.panel)),
         area,
     );
-    draw_gauge(frame, app, rows[0], "5h", profile.limit_5h_remaining);
-    draw_gauge(frame, app, rows[1], "7day", profile.limit_7day_remaining);
+    draw_gauge(
+        frame,
+        app,
+        rows[0],
+        "5h",
+        profile.limit_5h_remaining,
+        profile.limit_5h_resets_at,
+    );
+    draw_gauge(
+        frame,
+        app,
+        rows[1],
+        "7day",
+        profile.limit_7day_remaining,
+        profile.limit_7day_resets_at,
+    );
 }
 
-fn draw_gauge(frame: &mut Frame<'_>, app: &App, area: Rect, label: &str, value: Option<u8>) {
+fn draw_gauge(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    label: &str,
+    value: Option<u8>,
+    resets_at: Option<chrono::DateTime<chrono::Local>>,
+) {
     let value = value.unwrap_or(0).min(100);
     let gauge_area = Rect {
         x: area.x.saturating_add(2),
@@ -272,7 +293,10 @@ fn draw_gauge(frame: &mut Frame<'_>, app: &App, area: Rect, label: &str, value: 
     };
     frame.render_widget(
         Gauge::default()
-            .label(format!("{label} remaining {value}%"))
+            .label(format!(
+                "{label} remaining {value}%  reset {}",
+                reset_time(resets_at)
+            ))
             .ratio(f64::from(value) / 100.0)
             .gauge_style(
                 Style::default()
@@ -817,6 +841,12 @@ fn percent(value: Option<u8>) -> String {
 fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {
     value
         .map(|value| value.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "-".into())
+}
+
+fn reset_time(value: Option<chrono::DateTime<chrono::Local>>) -> String {
+    value
+        .map(|value| value.format("%m-%d %H:%M").to_string())
         .unwrap_or_else(|| "-".into())
 }
 
