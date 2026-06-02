@@ -1,4 +1,6 @@
-use crate::{activation, config, doctor, process, profile, shared, shell, size, tui};
+use crate::{
+    activation, config, doctor, process, profile, shared, shared_account, shell, size, tui,
+};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
@@ -69,7 +71,25 @@ enum Commands {
     Delete {
         name: String,
     },
+    SharedAccount {
+        #[command(subcommand)]
+        command: SharedAccountCommands,
+    },
     Tui,
+}
+
+#[derive(Debug, Subcommand)]
+enum SharedAccountCommands {
+    Setup {
+        profile: String,
+        target_user: String,
+        #[arg(long)]
+        source_profile: Option<std::path::PathBuf>,
+    },
+    Import {
+        name: String,
+    },
+    List,
 }
 
 pub fn run() -> Result<()> {
@@ -137,6 +157,30 @@ pub fn run() -> Result<()> {
             profile::delete(&name)?;
             println!("Deleted profile {name}");
         }
+        Commands::SharedAccount { command } => match command {
+            SharedAccountCommands::Setup {
+                profile,
+                target_user,
+                source_profile,
+            } => {
+                shared_account::setup_shared_account(&profile, &target_user, source_profile)?;
+                println!("Shared account {profile} with {target_user}");
+            }
+            SharedAccountCommands::Import { name } => {
+                let path = shared_account::import_shared_account(&name)?;
+                println!("Imported shared account {name}: {}", path.display());
+            }
+            SharedAccountCommands::List => {
+                for account in shared_account::list_shared_accounts()? {
+                    println!(
+                        "{}\towner={}\tallowed={}",
+                        account.name,
+                        account.owner.unwrap_or_else(|| "-".into()),
+                        account.allowed_users.join(",")
+                    );
+                }
+            }
+        },
         Commands::Tui => tui::run()?,
     }
     Ok(())

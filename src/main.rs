@@ -5,6 +5,7 @@ mod doctor;
 mod process;
 mod profile;
 mod shared;
+mod shared_account;
 mod shell;
 mod size;
 mod tui;

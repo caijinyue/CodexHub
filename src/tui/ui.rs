@@ -55,6 +55,7 @@ fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
                     ("Enter", "activate"),
                     ("n", "add"),
                     ("l", "relogin"),
+                    ("S", "share"),
                     ("d", "delete"),
                 ],
             ),
@@ -634,7 +635,7 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
     let (title, body) = match app.input_mode {
         InputMode::AddAccountMethod => (
             "➕ Add Account",
-            "1  Login new account\n2  Use current ~/.codex\n3  Import JSON\n\nEsc cancel".into(),
+            "1  Login new account\n2  Use current ~/.codex\n3  Import JSON\n4  Import shared account\n\nEsc cancel".into(),
         ),
         InputMode::LoginMethodForNewAccount => (
             "Login Method",
@@ -661,6 +662,27 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 app.input
             ),
         ),
+        InputMode::ShareTargetUser => (
+            "Share Account",
+            format!(
+                "Target Linux user: {}\nShares only auth.json and config.toml.\nSessions and history stay private.",
+                app.input
+            ),
+        ),
+        InputMode::ShareNeedsSudo => {
+            let body = app
+                .pending_share_plan
+                .as_ref()
+                .map(|plan| {
+                    format!(
+                        "Share Account\n\nAccount: {}\nTarget user: {}\n\nNeeds sudo setup.\nPress Enter to open tmux sudo helper.\nEsc cancel.",
+                        plan.profile, plan.target_user
+                    )
+                })
+                .unwrap_or_else(|| "No pending shared account setup.".into());
+            ("Share Account", body)
+        }
+        InputMode::ImportSharedAccount => return draw_import_shared_account_popup(frame, app, area),
         InputMode::DeleteConfirm => {
             let expected = app.current_name().unwrap_or_default();
             (
@@ -810,6 +832,59 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
     .block(widgets::block("Continue With Account", app.theme))
     .style(Style::default().fg(app.theme.text).bg(app.theme.panel));
     frame.render_widget(table, area);
+}
+
+fn draw_import_shared_account_popup(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    frame.render_widget(Clear, area);
+    let rows = app
+        .shared_accounts
+        .iter()
+        .enumerate()
+        .map(|(idx, account)| {
+            let style = if idx == app.selected_shared_account {
+                widgets::selected_style(app.theme)
+            } else {
+                Style::default().fg(app.theme.text).bg(app.theme.panel)
+            };
+            Row::new(vec![
+                Cell::from(account.name.clone()),
+                Cell::from(account.owner.clone().unwrap_or_else(|| "-".into())),
+                Cell::from(account.allowed_users.join(",")),
+                Cell::from(
+                    account
+                        .created_at
+                        .map(|value| value.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "-".into()),
+                ),
+                Cell::from(short_home(&account.path.display().to_string())),
+            ])
+            .style(style)
+        });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(18),
+            Constraint::Length(14),
+            Constraint::Min(16),
+            Constraint::Length(10),
+            Constraint::Min(18),
+        ],
+    )
+    .header(
+        Row::new(["Account", "Owner", "Allowed", "Created", "Path"])
+            .style(widgets::header_style(app.theme)),
+    )
+    .block(widgets::block("Import Shared Account", app.theme))
+    .style(Style::default().fg(app.theme.text).bg(app.theme.panel));
+    frame.render_widget(table, area);
+    if app.shared_accounts.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No shared accounts found.\n\nEsc cancel")
+                .block(widgets::block("Import Shared Account", app.theme))
+                .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
+            area,
+        );
+    }
 }
 
 fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect, groups: &[(&str, &[(&str, &str)])]) {

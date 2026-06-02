@@ -6,6 +6,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::process::Command;
 use std::time::Duration;
 
 pub fn run_loop(
@@ -56,6 +57,7 @@ fn handle_list(
         KeyCode::Char('n') => start_input(app, InputMode::AddAccountMethod),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => start_input(app, InputMode::LoginMethodForSelected),
+        KeyCode::Char('S') => start_input(app, InputMode::ShareTargetUser),
         KeyCode::Char('r') => app.refresh_profiles_now()?,
         KeyCode::Char('s') => app.screen = Screen::Settings,
         KeyCode::Char('o') => external_open(terminal, app)?,
@@ -129,6 +131,7 @@ fn handle_input(
                 app.update_info = None;
             }
             app.pending_login_method = None;
+            app.pending_share_plan = None;
             app.input_mode = InputMode::None;
         }
         KeyCode::Char('1') if app.input_mode == InputMode::AddAccountMethod => {
@@ -139,6 +142,10 @@ fn handle_input(
         }
         KeyCode::Char('3') if app.input_mode == InputMode::AddAccountMethod => {
             start_input(app, InputMode::ImportSub2);
+        }
+        KeyCode::Char('4') if app.input_mode == InputMode::AddAccountMethod => {
+            app.refresh_shared_accounts()?;
+            app.input_mode = InputMode::ImportSharedAccount;
         }
         KeyCode::Char('1') if app.input_mode == InputMode::LoginMethodForNewAccount => {
             app.pending_login_method = Some(crate::process::LoginMethod::DeviceCode);
@@ -155,6 +162,12 @@ fn handle_input(
             external_relogin(terminal, app, crate::process::LoginMethod::Web)?;
         }
         KeyCode::Enter => submit_input(terminal, app)?,
+        KeyCode::Down if app.input_mode == InputMode::ImportSharedAccount => {
+            app.move_shared_account_down();
+        }
+        KeyCode::Up if app.input_mode == InputMode::ImportSharedAccount => {
+            app.move_shared_account_up();
+        }
         KeyCode::Down if app.input_mode == InputMode::ContinueProfile => {
             app.move_continue_profile_down();
         }
@@ -178,6 +191,7 @@ fn handle_input(
                 InputMode::NewLoginProfileName
                     | InputMode::ImportDefault
                     | InputMode::ImportSub2
+                    | InputMode::ShareTargetUser
                     | InputMode::DeleteConfirm
             ) {
                 app.input.push(ch);
@@ -226,6 +240,34 @@ fn submit_input(
             app.refresh_profiles()?;
             app.set_message(format!("Imported JSON as account {name}"));
         }
+        InputMode::ShareTargetUser => {
+            let Some(name) = app.current_name() else {
+                app.set_message("No account selected");
+                return Ok(());
+            };
+            let target_user = app.input.trim();
+            let plan = crate::shared_account::plan_share_account(&name, target_user)?;
+            if plan.needs_sudo {
+                app.pending_share_plan = Some(plan);
+                app.input_mode = InputMode::ShareNeedsSudo;
+                app.input.clear();
+                return Ok(());
+            }
+            crate::shared_account::share_account(&name, target_user)?;
+            app.set_message(format!("Shared account {name} with {target_user}"));
+        }
+        InputMode::ShareNeedsSudo => {
+            external_share_sudo_helper(terminal, app)?;
+        }
+        InputMode::ImportSharedAccount => {
+            let Some(name) = app.current_shared_account_name() else {
+                app.set_message("No shared account available");
+                return Ok(());
+            };
+            crate::shared_account::import_shared_account(&name)?;
+            app.refresh_profiles()?;
+            app.set_message(format!("Imported shared account {name}"));
+        }
         InputMode::DeleteConfirm => {
             let Some(name) = app.current_name() else {
                 return Ok(());
@@ -272,6 +314,8 @@ fn start_input(app: &mut App, mode: InputMode) {
                 | InputMode::NewLoginProfileName
                 | InputMode::ImportDefault
                 | InputMode::ImportSub2
+                | InputMode::ShareTargetUser
+                | InputMode::ImportSharedAccount
                 | InputMode::ContinueProfile
         )
     {
@@ -279,6 +323,32 @@ fn start_input(app: &mut App, mode: InputMode) {
     } else {
         app.input_mode = mode;
     }
+}
+
+fn external_share_sudo_helper(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    let Some(plan) = app.pending_share_plan.clone() else {
+        app.set_message("No pending shared account setup");
+        return Ok(());
+    };
+    let command = crate::shared_account::tmux_helper_command(&plan);
+    let status = run_suspended(terminal, || {
+        let status = Command::new("sh").arg("-lc").arg(&command).status()?;
+        Ok(status.code().unwrap_or(1))
+    })?;
+    app.pending_share_plan = None;
+    app.refresh_shared_accounts().ok();
+    if status == 0 {
+        app.set_message(format!(
+            "Shared account {} with {}",
+            plan.profile, plan.target_user
+        ));
+    } else {
+        app.set_message(format!("Shared account setup exited with status {status}"));
+    }
+    Ok(())
 }
 
 fn start_continue_profile_select(app: &mut App) {

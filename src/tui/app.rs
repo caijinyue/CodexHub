@@ -24,6 +24,9 @@ pub struct App {
     pub history_cwd: Option<PathBuf>,
     pub selected_history: usize,
     pub selected_continue_profile: usize,
+    pub shared_accounts: Vec<crate::shared_account::SharedAccountInfo>,
+    pub selected_shared_account: usize,
+    pub pending_share_plan: Option<crate::shared_account::ShareAccountPlan>,
     pub pending_login_method: Option<process::LoginMethod>,
     pub update_info: Option<update::UpdateInfo>,
     pub update_error: Option<String>,
@@ -61,6 +64,9 @@ impl App {
             history_cwd: std::env::current_dir().ok(),
             selected_history: 0,
             selected_continue_profile: 0,
+            shared_accounts: Vec::new(),
+            selected_shared_account: 0,
+            pending_share_plan: None,
             pending_login_method: None,
             update_info: None,
             update_error: None,
@@ -152,6 +158,31 @@ impl App {
         self.profiles
             .get(self.selected_continue_profile)
             .map(|profile| profile.name.clone())
+    }
+
+    pub fn refresh_shared_accounts(&mut self) -> Result<()> {
+        self.shared_accounts = crate::shared_account::list_shared_accounts()?;
+        if self.selected_shared_account >= self.shared_accounts.len() {
+            self.selected_shared_account = self.shared_accounts.len().saturating_sub(1);
+        }
+        Ok(())
+    }
+
+    pub fn current_shared_account_name(&self) -> Option<String> {
+        self.shared_accounts
+            .get(self.selected_shared_account)
+            .map(|account| account.name.clone())
+    }
+
+    pub fn move_shared_account_down(&mut self) {
+        if !self.shared_accounts.is_empty() {
+            self.selected_shared_account =
+                (self.selected_shared_account + 1).min(self.shared_accounts.len() - 1);
+        }
+    }
+
+    pub fn move_shared_account_up(&mut self) {
+        self.selected_shared_account = self.selected_shared_account.saturating_sub(1);
     }
 
     pub fn move_continue_profile_down(&mut self) {
