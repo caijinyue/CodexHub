@@ -39,6 +39,8 @@ fn handle_key(
         Screen::List => handle_list(terminal, app, key),
         Screen::Doctor => handle_doctor(app, key),
         Screen::History => handle_history(terminal, app, key),
+        Screen::Remote => handle_remote(app, key),
+        Screen::SharedAccounts => handle_shared_accounts(app, key),
         Screen::Settings => handle_settings(app, key),
     }
 }
@@ -57,8 +59,12 @@ fn handle_list(
         KeyCode::Char('n') => start_input(app, InputMode::AddAccountMethod),
         KeyCode::Char('d') => start_input(app, InputMode::DeleteConfirm),
         KeyCode::Char('l') => start_input(app, InputMode::LoginMethodForSelected),
-        KeyCode::Char('S') => start_input(app, InputMode::ShareTargetUser),
         KeyCode::Char('r') => app.refresh_profiles_now()?,
+        KeyCode::Char('R') => app.screen = Screen::Remote,
+        KeyCode::Char('S') => {
+            app.refresh_shared_accounts()?;
+            app.screen = Screen::SharedAccounts;
+        }
         KeyCode::Char('s') => app.screen = Screen::Settings,
         KeyCode::Char('o') => external_open(terminal, app)?,
         KeyCode::Char('h') => {
@@ -68,6 +74,36 @@ fn handle_list(
         KeyCode::Char('D') => {
             app.doctor_checks = crate::doctor::run(false)?;
             app.screen = Screen::Doctor;
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_remote(app: &mut App, key: KeyEvent) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_shared_accounts(app: &mut App, key: KeyEvent) -> Result<bool> {
+    match key.code {
+        KeyCode::Char('q') => app.screen = Screen::List,
+        KeyCode::Char('t') => app.cycle_theme()?,
+        KeyCode::Down => app.move_down(),
+        KeyCode::Up => app.move_up(),
+        KeyCode::Char('S') => start_input(app, InputMode::ShareTargetUser),
+        KeyCode::Char('u') => start_input(app, InputMode::RemoveSharedAccountConfirm),
+        KeyCode::Char('i') => {
+            app.refresh_shared_accounts()?;
+            app.input_mode = InputMode::ImportSharedAccount;
+        }
+        KeyCode::Char('r') => {
+            app.refresh_profiles_now()?;
+            app.refresh_shared_accounts()?;
         }
         _ => {}
     }
@@ -112,6 +148,7 @@ fn handle_history(
         KeyCode::Up => app.move_history_up(),
         KeyCode::Char('a') => app.toggle_history_path_scope(),
         KeyCode::Char('r') => app.refresh_history_sessions()?,
+        KeyCode::Char('d') => start_input(app, InputMode::DeleteSessionConfirm),
         KeyCode::Char('c') => start_continue_profile_select(app),
         KeyCode::Enter => external_resume(terminal, app)?,
         _ => {}
@@ -192,7 +229,9 @@ fn handle_input(
                     | InputMode::ImportDefault
                     | InputMode::ImportSub2
                     | InputMode::ShareTargetUser
+                    | InputMode::RemoveSharedAccountConfirm
                     | InputMode::DeleteConfirm
+                    | InputMode::DeleteSessionConfirm
             ) {
                 app.input.push(ch);
             }
@@ -245,19 +284,37 @@ fn submit_input(
                 app.set_message("No account selected");
                 return Ok(());
             };
-            let target_user = app.input.trim();
-            let plan = crate::shared_account::plan_share_account(&name, target_user)?;
+            let target_user = app.input.trim().to_string();
+            let plan = crate::shared_account::plan_share_account(&name, &target_user)?;
             if plan.needs_sudo {
                 app.pending_share_plan = Some(plan);
                 app.input_mode = InputMode::ShareNeedsSudo;
                 app.input.clear();
                 return Ok(());
             }
-            crate::shared_account::share_account(&name, target_user)?;
+            crate::shared_account::share_account(&name, &target_user)?;
+            app.refresh_shared_accounts()?;
             app.set_message(format!("Shared account {name} with {target_user}"));
         }
         InputMode::ShareNeedsSudo => {
             external_share_sudo_helper(terminal, app)?;
+        }
+        InputMode::RemoveSharedAccountConfirm => {
+            let Some(name) = app.current_name() else {
+                app.set_message("No account selected");
+                return Ok(());
+            };
+            if app.input.trim() == name {
+                match crate::shared_account::remove_shared_account(&name) {
+                    Ok(()) => {
+                        app.refresh_shared_accounts()?;
+                        app.set_message(format!("Removed shared account {name}"));
+                    }
+                    Err(err) => app.set_message(format!("Remove shared account failed: {err}")),
+                }
+            } else {
+                app.set_message("Shared account removal cancelled");
+            }
         }
         InputMode::ImportSharedAccount => {
             let Some(name) = app.current_shared_account_name() else {
@@ -275,9 +332,24 @@ fn submit_input(
             if app.input.trim() == name {
                 crate::profile::delete(&name)?;
                 app.refresh_profiles()?;
-                app.set_message(format!("Deleted account {name}"));
+                app.set_message(format!(
+                    "Deleted account login for {name}; history preserved"
+                ));
             } else {
                 app.set_message("Deletion cancelled");
+            }
+        }
+        InputMode::DeleteSessionConfirm => {
+            let Some(session) = app.current_history_session() else {
+                app.set_message("No history session selected");
+                return Ok(());
+            };
+            if app.input.trim() == session.session_id {
+                crate::process::delete_history_session(&session)?;
+                app.refresh_history_sessions()?;
+                app.set_message(format!("Deleted session {}", session.session_id));
+            } else {
+                app.set_message("Session deletion cancelled");
             }
         }
         InputMode::ContinueProfile => {
@@ -315,7 +387,9 @@ fn start_input(app: &mut App, mode: InputMode) {
                 | InputMode::ImportDefault
                 | InputMode::ImportSub2
                 | InputMode::ShareTargetUser
+                | InputMode::RemoveSharedAccountConfirm
                 | InputMode::ImportSharedAccount
+                | InputMode::DeleteSessionConfirm
                 | InputMode::ContinueProfile
         )
     {

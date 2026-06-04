@@ -174,6 +174,15 @@ impl App {
             .map(|account| account.name.clone())
     }
 
+    pub fn shared_account_for_profile(
+        &self,
+        name: &str,
+    ) -> Option<&crate::shared_account::SharedAccountInfo> {
+        self.shared_accounts
+            .iter()
+            .find(|account| account.name == name)
+    }
+
     pub fn move_shared_account_down(&mut self) {
         if !self.shared_accounts.is_empty() {
             self.selected_shared_account =
@@ -290,7 +299,6 @@ impl App {
         let names: Vec<_> = self
             .profiles
             .iter()
-            .filter(|profile| profile.logged_in)
             .map(|profile| profile.name.clone())
             .collect();
         let (tx, rx) = mpsc::channel();

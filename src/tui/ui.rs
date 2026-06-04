@@ -17,6 +17,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         Screen::List => draw_profile_workspace(frame, app),
         Screen::Doctor => draw_doctor(frame, app),
         Screen::History => draw_history(frame, app),
+        Screen::Remote => draw_remote(frame, app),
+        Screen::SharedAccounts => draw_shared_accounts(frame, app),
         Screen::Settings => draw_settings(frame, app),
     }
     if app.input_mode != InputMode::None {
@@ -55,7 +57,6 @@ fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
                     ("Enter", "activate"),
                     ("n", "add"),
                     ("l", "relogin"),
-                    ("S", "share"),
                     ("d", "delete"),
                 ],
             ),
@@ -64,6 +65,8 @@ fn draw_profile_workspace(frame: &mut Frame<'_>, app: &App) {
                 "System",
                 &[
                     ("h", "history"),
+                    ("R", "remote"),
+                    ("S", "shared"),
                     ("r", "refresh"),
                     ("s", "settings"),
                     ("t", "theme"),
@@ -452,6 +455,7 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                 &[
                     ("Enter", "resume"),
                     ("c", "continue as"),
+                    ("d", "delete"),
                     ("a", "all/current"),
                 ],
             ),
@@ -492,6 +496,190 @@ fn draw_settings(frame: &mut Frame<'_>, app: &App) {
             ("System", &[("t", "theme"), ("q", "back")]),
         ],
     );
+}
+
+fn draw_remote(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(12), Constraint::Length(3)])
+        .split(area);
+    let status = crate::remote::status();
+    let rows = match status {
+        Ok(status) => vec![
+            detail_row(
+                "Password",
+                if status.password_configured {
+                    "configured"
+                } else {
+                    "not configured"
+                },
+            ),
+            detail_row("Config", status.config_path.display().to_string()),
+            detail_row("Local URL", status.localhost_url),
+            detail_row("Tailscale URL", status.tailscale_url),
+            detail_row("Local command", status.localhost_command),
+            detail_row("Tailscale cmd", status.tailscale_command),
+            detail_row("Password cmd", "codexhub remote password <new-password>"),
+        ],
+        Err(err) => vec![detail_row("Remote", format!("unavailable: {err}"))],
+    };
+    let table = Table::new(rows, [Constraint::Length(14), Constraint::Min(28)])
+        .block(widgets::block("🌐 Remote", app.theme))
+        .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+        .column_spacing(2);
+    frame.render_widget(table, chunks[0]);
+    draw_footer(
+        frame,
+        app,
+        chunks[1],
+        &[("System", &[("t", "theme"), ("q", "back")])],
+    );
+}
+
+fn draw_shared_accounts(frame: &mut Frame<'_>, app: &App) {
+    let area = frame.area();
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
+        .split(area);
+    let body = if vertical[0].width < 92 {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(vertical[0])
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(vertical[0])
+    };
+    draw_share_profile_list(frame, app, body[0]);
+    draw_share_detail(frame, app, body[1]);
+    draw_footer(
+        frame,
+        app,
+        vertical[1],
+        &[
+            (
+                "Share",
+                &[("S", "share"), ("u", "unshare"), ("i", "import")],
+            ),
+            ("System", &[("r", "refresh"), ("t", "theme"), ("q", "back")]),
+        ],
+    );
+}
+
+fn draw_share_profile_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let visible = usize::from(area.height.saturating_sub(2)).max(1);
+    let start = app.selected.saturating_add(1).saturating_sub(visible);
+    let items = app
+        .profiles
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(idx, profile)| {
+            let selected = idx == app.selected;
+            let exported = app.shared_account_for_profile(&profile.name).is_some();
+            let imported = imported_shared_source(profile)
+                .map(|source| source.display().to_string())
+                .is_some();
+            let state = match (exported, imported) {
+                (true, true) => "shared + imported",
+                (true, false) => "shared",
+                (false, true) => "imported",
+                (false, false) => "local only",
+            };
+            let style = if selected {
+                widgets::selected_style(app.theme)
+            } else {
+                Style::default().fg(app.theme.text).bg(app.theme.surface)
+            };
+            ListItem::new(vec![
+                Line::from(Span::styled(
+                    profile.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(state, Style::default().fg(app.theme.muted))),
+            ])
+            .style(style)
+        });
+    frame.render_widget(
+        List::new(items)
+            .block(widgets::block("🔗 Accounts", app.theme))
+            .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
+        area,
+    );
+}
+
+fn draw_share_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let Some(profile) = app.profiles.get(app.selected) else {
+        frame.render_widget(
+            Paragraph::new("No account selected")
+                .block(widgets::block("🔗 Shared Account", app.theme))
+                .style(Style::default().fg(app.theme.text).bg(app.theme.panel)),
+            area,
+        );
+        return;
+    };
+    let exported = app.shared_account_for_profile(&profile.name);
+    let imported = imported_shared_source(profile);
+    let shared_root = crate::shared_account::SHARED_ACCOUNTS_ROOT.to_string();
+    let rows = vec![
+        detail_row("Account", profile.name.clone()),
+        detail_row(
+            "Exported",
+            exported
+                .map(|_| "yes".to_string())
+                .unwrap_or_else(|| "no".into()),
+        ),
+        detail_row(
+            "Imported",
+            imported
+                .as_ref()
+                .map(|path| short_home(&path.display().to_string()))
+                .unwrap_or_else(|| "no".into()),
+        ),
+        detail_row(
+            "Owner",
+            exported
+                .and_then(|account| account.owner.clone())
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row(
+            "Allowed",
+            exported
+                .map(|account| {
+                    if account.allowed_users.is_empty() {
+                        "-".into()
+                    } else {
+                        account.allowed_users.join(", ")
+                    }
+                })
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row(
+            "Created",
+            exported
+                .and_then(|account| account.created_at)
+                .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row(
+            "Shared path",
+            exported
+                .map(|account| short_home(&account.path.display().to_string()))
+                .unwrap_or_else(|| "-".into()),
+        ),
+        detail_row("Root", shared_root),
+        detail_row("Local path", profile.path.display().to_string()),
+    ];
+    let table = Table::new(rows, [Constraint::Length(14), Constraint::Min(24)])
+        .block(widgets::block("🔗 Shared Account", app.theme))
+        .style(Style::default().fg(app.theme.text).bg(app.theme.panel))
+        .column_spacing(2);
+    frame.render_widget(table, area);
 }
 
 fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -682,13 +870,36 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 .unwrap_or_else(|| "No pending shared account setup.".into());
             ("Share Account", body)
         }
+        InputMode::RemoveSharedAccountConfirm => {
+            let expected = app.current_name().unwrap_or_default();
+            (
+                "Remove Shared Account",
+                format!(
+                    "Type \"{expected}\" to remove this shared account.\nThis removes the shared copy only. The local account remains untouched.\n\n{}",
+                    app.input
+                ),
+            )
+        }
         InputMode::ImportSharedAccount => return draw_import_shared_account_popup(frame, app, area),
         InputMode::DeleteConfirm => {
             let expected = app.current_name().unwrap_or_default();
             (
                 "Delete Account",
                 format!(
-                    "Type \"{expected}\" to delete this account.\nThis does not delete your OpenAI account.\n\n{}",
+                    "Type \"{expected}\" to delete this account login.\nSessions and history are preserved.\nThis does not delete your OpenAI account.\n\n{}",
+                    app.input
+                ),
+            )
+        }
+        InputMode::DeleteSessionConfirm => {
+            let session_id = app
+                .current_history_session()
+                .map(|session| session.session_id)
+                .unwrap_or_default();
+            (
+                "Delete Session",
+                format!(
+                    "Type \"{session_id}\" to delete this history session.\nThis removes the selected rollout file and local index entries.\n\n{}",
                     app.input
                 ),
             )
@@ -952,6 +1163,13 @@ fn preview_user_bg(theme: widgets::Theme) -> Color {
         }
         _ => Color::Rgb(45, 55, 72),
     }
+}
+
+fn imported_shared_source(profile: &ProfileInfo) -> Option<std::path::PathBuf> {
+    let source = std::fs::read_link(profile.path.join("auth.json")).ok()?;
+    source
+        .starts_with(crate::shared_account::SHARED_ACCOUNTS_ROOT)
+        .then_some(source)
 }
 
 fn detail_row(label: impl Into<String>, value: impl Into<String>) -> Row<'static> {

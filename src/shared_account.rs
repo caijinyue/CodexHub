@@ -132,6 +132,18 @@ pub fn import_shared_account(name: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
+pub fn remove_shared_account(name: &str) -> Result<()> {
+    config::ensure_profile_name(name)?;
+    let shared = shared_profile_path(name);
+    if !shared.exists() {
+        anyhow::bail!("Shared account does not exist: {name}");
+    }
+    if !shared_root_writable() {
+        anyhow::bail!("Needs sudo. Run: {}", remove_sudo_command(name));
+    }
+    fs::remove_dir_all(&shared).with_context(|| format!("Removing {}", shared.display()))
+}
+
 pub fn sudo_command(plan: &ShareAccountPlan) -> String {
     format!(
         "sudo {} shared-account setup {} {} --source-profile {}",
@@ -139,6 +151,14 @@ pub fn sudo_command(plan: &ShareAccountPlan) -> String {
         shell_escape(&plan.profile),
         shell_escape(&plan.target_user),
         shell_escape(plan.source_profile.display().to_string())
+    )
+}
+
+pub fn remove_sudo_command(name: &str) -> String {
+    format!(
+        "sudo {} shared-account remove {}",
+        shell_escape(current_exe()),
+        shell_escape(name)
     )
 }
 

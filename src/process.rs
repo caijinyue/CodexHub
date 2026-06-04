@@ -2,9 +2,9 @@ use crate::profile;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -205,15 +205,63 @@ pub fn codex_history_sessions_from_home(
     is_codexhub_profile: bool,
     limit: usize,
 ) -> Result<Vec<HistorySession>> {
-    let text = app_server_request_home(
+    let app_server_sessions = app_server_request_home(
         &home,
         3,
         &format!(
             r#"{{"id":3,"method":"thread/list","params":{{"limit":{limit},"sortKey":"updated_at","sortDirection":"desc","sourceKinds":[],"archived":false,"cwd":null,"useStateDbOnly":false}}}}"#
         ),
+    )
+    .ok()
+    .and_then(|text| parse_history_sessions(label, home.clone(), is_codexhub_profile, &text));
+    let mut sessions = app_server_sessions
+        .unwrap_or_else(|| local_history_sessions(label, home, is_codexhub_profile, limit));
+    sessions.retain(|session| {
+        session
+            .path
+            .as_deref()
+            .map(|path| Path::new(path).is_file())
+            .unwrap_or(true)
+    });
+    sessions.truncate(limit);
+    Ok(sessions)
+}
+
+pub fn delete_history_session(session: &HistorySession) -> Result<()> {
+    let Some(path) = session.path.as_deref() else {
+        anyhow::bail!("Selected session does not expose a rollout path");
+    };
+    let path = PathBuf::from(path);
+    let relative = path.strip_prefix(&session.codex_home).with_context(|| {
+        format!(
+            "Session file {} is not under CODEX_HOME {}",
+            path.display(),
+            session.codex_home.display()
+        )
+    })?;
+    if relative
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        != Some(std::ffi::OsStr::new("sessions"))
+    {
+        anyhow::bail!("Refusing to delete non-session file {}", path.display());
+    }
+    if path.exists() {
+        fs::remove_file(&path).with_context(|| format!("Deleting {}", path.display()))?;
+    }
+    remove_session_index_line(
+        &session.codex_home.join("session_index.jsonl"),
+        &session.session_id,
     )?;
-    parse_history_sessions(label, home, is_codexhub_profile, &text)
-        .context("Parsing codex resume session list")
+    remove_session_index_line(
+        &session.codex_home.join("history.jsonl"),
+        &session.session_id,
+    )?;
+    Ok(())
 }
 
 fn app_server_request(name: &str, request_id: u64, request: &str) -> Result<String> {
@@ -365,6 +413,105 @@ fn parse_history_sessions(
         }
     }
     None
+}
+
+fn local_history_sessions(
+    label: &str,
+    home: PathBuf,
+    is_codexhub_profile: bool,
+    limit: usize,
+) -> Vec<HistorySession> {
+    let index = home.join("session_index.jsonl");
+    let Ok(data) = fs::read_to_string(&index) else {
+        return Vec::new();
+    };
+    let mut sessions: Vec<_> = data
+        .lines()
+        .filter_map(|line| local_history_session(label, &home, is_codexhub_profile, line))
+        .collect();
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    sessions.truncate(limit);
+    sessions
+}
+
+fn local_history_session(
+    label: &str,
+    home: &Path,
+    is_codexhub_profile: bool,
+    line: &str,
+) -> Option<HistorySession> {
+    let value: LocalSessionIndexLine = serde_json::from_str(line).ok()?;
+    let session_id = value.id?;
+    let rollout_path = find_session_rollout(home, &session_id);
+    let cwd = rollout_path.as_deref().and_then(session_meta_cwd);
+    let path = rollout_path.map(|path| path.display().to_string());
+    let updated_at = value
+        .updated_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp())
+        .unwrap_or(0);
+    Some(HistorySession {
+        profile: label.to_string(),
+        codex_home: home.to_path_buf(),
+        is_codexhub_profile,
+        session_id,
+        title: value
+            .thread_name
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "(untitled)".into()),
+        cwd,
+        path,
+        updated_at,
+    })
+}
+
+fn find_session_rollout(home: &Path, session_id: &str) -> Option<PathBuf> {
+    walkdir::WalkDir::new(home.join("sessions"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let path = entry.path();
+            path.is_file()
+                .then(|| {
+                    path.file_name()?
+                        .to_str()?
+                        .contains(session_id)
+                        .then(|| path.to_path_buf())
+                })
+                .flatten()
+        })
+}
+
+fn session_meta_cwd(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let mut lines = BufReader::new(file).lines();
+    let line = lines.next()?.ok()?;
+    let value: Value = serde_json::from_str(&line).ok()?;
+    if value.pointer("/type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    value
+        .pointer("/payload/cwd")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn remove_session_index_line(path: &Path, session_id: &str) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let data = fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
+    let kept: Vec<_> = data
+        .lines()
+        .filter(|line| !line.contains(session_id))
+        .collect();
+    let mut output = kept.join("\n");
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    fs::write(path, output).with_context(|| format!("Writing {}", path.display()))?;
+    Ok(())
 }
 
 fn trim_preview(text: &str) -> String {
@@ -545,6 +692,13 @@ struct ThreadSummary {
     cwd: Option<String>,
     path: Option<String>,
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalSessionIndexLine {
+    id: Option<String>,
+    thread_name: Option<String>,
+    updated_at: Option<String>,
 }
 
 #[cfg(test)]
@@ -731,6 +885,102 @@ mod tests {
                 },
             ]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deletes_selected_history_session_file_and_indexes() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-delete-session-test-{stamp}"));
+        let sessions = root.join("sessions").join("2026").join("06").join("04");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let deleted = sessions.join("rollout-2026-06-04T00-00-00-delete-me.jsonl");
+        let kept = sessions.join("rollout-2026-06-04T00-00-01-keep-me.jsonl");
+        std::fs::write(&deleted, "{}\n").unwrap();
+        std::fs::write(&kept, "{}\n").unwrap();
+        std::fs::write(
+            root.join("session_index.jsonl"),
+            r#"{"id":"delete-me","thread_name":"Delete","updated_at":"2026-06-04T00:00:00Z"}"#
+                .to_string()
+                + "\n"
+                + r#"{"id":"keep-me","thread_name":"Keep","updated_at":"2026-06-04T00:00:01Z"}"#
+                + "\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("history.jsonl"),
+            r#"{"session_id":"delete-me","ts":1,"text":"delete"}"#.to_string()
+                + "\n"
+                + r#"{"session_id":"keep-me","ts":2,"text":"keep"}"#
+                + "\n",
+        )
+        .unwrap();
+        let session = HistorySession {
+            profile: "work".into(),
+            codex_home: root.clone(),
+            session_id: "delete-me".into(),
+            title: "Delete".into(),
+            updated_at: 1,
+            cwd: None,
+            path: Some(deleted.display().to_string()),
+            is_codexhub_profile: true,
+        };
+
+        delete_history_session(&session).unwrap();
+
+        assert!(!deleted.exists());
+        assert!(kept.exists());
+        assert!(!std::fs::read_to_string(root.join("session_index.jsonl"))
+            .unwrap()
+            .contains("delete-me"));
+        assert!(std::fs::read_to_string(root.join("session_index.jsonl"))
+            .unwrap()
+            .contains("keep-me"));
+        assert!(!std::fs::read_to_string(root.join("history.jsonl"))
+            .unwrap()
+            .contains("delete-me"));
+        assert!(std::fs::read_to_string(root.join("history.jsonl"))
+            .unwrap()
+            .contains("keep-me"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parses_local_history_index_with_rollout_cwd() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-local-history-test-{stamp}"));
+        let sessions = root.join("sessions").join("2026").join("06").join("04");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("rollout-2026-06-04T00-00-00-local-session.jsonl"),
+            r#"{"type":"session_meta","payload":{"id":"local-session","cwd":"/repo"}}"#.to_string()
+                + "\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("session_index.jsonl"),
+            r#"{"id":"local-session","thread_name":"Local","updated_at":"2026-06-04T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let sessions = local_history_sessions("work", root.clone(), true, 10);
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "local-session");
+        assert_eq!(sessions[0].title, "Local");
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
+        assert_eq!(sessions[0].updated_at, 1780531200);
+        assert!(sessions[0]
+            .path
+            .as_deref()
+            .unwrap()
+            .contains("local-session"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

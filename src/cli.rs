@@ -1,5 +1,5 @@
 use crate::{
-    activation, config, doctor, process, profile, shared, shared_account, shell, size, tui,
+    activation, config, doctor, process, profile, remote, shared, shared_account, shell, size, tui,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -75,6 +75,18 @@ enum Commands {
         #[command(subcommand)]
         command: SharedAccountCommands,
     },
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 17777)]
+        port: u16,
+        #[arg(long)]
+        password: Option<String>,
+    },
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
     Tui,
 }
 
@@ -89,7 +101,15 @@ enum SharedAccountCommands {
     Import {
         name: String,
     },
+    Remove {
+        name: String,
+    },
     List,
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteCommands {
+    Password { password: String },
 }
 
 pub fn run() -> Result<()> {
@@ -170,6 +190,10 @@ pub fn run() -> Result<()> {
                 let path = shared_account::import_shared_account(&name)?;
                 println!("Imported shared account {name}: {}", path.display());
             }
+            SharedAccountCommands::Remove { name } => {
+                shared_account::remove_shared_account(&name)?;
+                println!("Removed shared account {name}");
+            }
             SharedAccountCommands::List => {
                 for account in shared_account::list_shared_accounts()? {
                     println!(
@@ -179,6 +203,17 @@ pub fn run() -> Result<()> {
                         account.allowed_users.join(",")
                     );
                 }
+            }
+        },
+        Commands::Serve {
+            host,
+            port,
+            password,
+        } => remote::run_server(host, port, password)?,
+        Commands::Remote { command } => match command {
+            RemoteCommands::Password { password } => {
+                remote::set_password(&password)?;
+                println!("Remote password updated");
             }
         },
         Commands::Tui => tui::run()?,

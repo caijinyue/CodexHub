@@ -151,7 +151,12 @@ pub fn delete(name: &str) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("Profile does not exist: {name}");
     }
-    fs::remove_dir_all(&path).with_context(|| format!("Deleting {}", path.display()))?;
+    for file in ["auth.json", ".credentials.json", "installation_id"] {
+        let target = path.join(file);
+        if target.exists() {
+            fs::remove_file(&target).with_context(|| format!("Deleting {}", target.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -698,6 +703,37 @@ mod tests {
         assert!(fs::read_to_string(target.join("session_index.jsonl"))
             .unwrap()
             .contains("test-session"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_removes_account_login_but_preserves_history() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-delete-account-test-{stamp}"));
+        std::env::set_var("CODEXHUB_HOME", &root);
+        let path = create("work", false).unwrap();
+        fs::write(path.join("auth.json"), "{}\n").unwrap();
+        fs::write(path.join(".credentials.json"), "{}\n").unwrap();
+        fs::write(path.join("installation_id"), "install\n").unwrap();
+        fs::write(path.join("history.jsonl"), "{}\n").unwrap();
+        fs::write(path.join("session_index.jsonl"), "{}\n").unwrap();
+        let session = path.join("sessions").join("rollout-test.jsonl");
+        fs::write(&session, "{}\n").unwrap();
+
+        delete("work").unwrap();
+
+        assert!(path.is_dir());
+        assert!(!path.join("auth.json").exists());
+        assert!(!path.join(".credentials.json").exists());
+        assert!(!path.join("installation_id").exists());
+        assert!(path.join("history.jsonl").is_file());
+        assert!(path.join("session_index.jsonl").is_file());
+        assert!(session.is_file());
 
         fs::remove_dir_all(&root).ok();
     }

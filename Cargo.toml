@@ -7,14 +7,19 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1"
+argon2 = "0.5"
+axum = { version = "0.7", features = ["ws"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 dirs = "5"
 fs_extra = "1"
 humansize = "2"
+rand_core = { version = "0.6", features = ["std"] }
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
 toml = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"

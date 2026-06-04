@@ -3,6 +3,8 @@ pub enum Screen {
     List,
     Doctor,
     History,
+    Remote,
+    SharedAccounts,
     Settings,
 }
 
@@ -17,8 +19,10 @@ pub enum InputMode {
     ImportSub2,
     ShareTargetUser,
     ShareNeedsSudo,
+    RemoveSharedAccountConfirm,
     ImportSharedAccount,
     DeleteConfirm,
+    DeleteSessionConfirm,
     ContinueProfile,
     UpdatePrompt,
     Message,
