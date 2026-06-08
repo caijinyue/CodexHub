@@ -6,6 +6,7 @@ pub mod widgets;
 
 use anyhow::Result;
 use crossterm::{
+    event::{DisableBracketedPaste, EnableBracketedPaste},
     execute,
     style::{Attribute, ResetColor, SetAttribute},
     terminal::{
@@ -19,13 +20,18 @@ use std::io;
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut app = app::App::new()?;
     let result = events::run_loop(&mut terminal, &mut app);
     disable_raw_mode().ok();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )
+    .ok();
     terminal.show_cursor().ok();
     result
 }
@@ -36,6 +42,7 @@ pub fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -
         terminal.backend_mut(),
         SetAttribute(Attribute::Reset),
         ResetColor,
+        DisableBracketedPaste,
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
@@ -47,6 +54,7 @@ pub fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
     execute!(
         terminal.backend_mut(),
         EnterAlternateScreen,
+        EnableBracketedPaste,
         SetAttribute(Attribute::Reset),
         ResetColor,
         Clear(ClearType::All)

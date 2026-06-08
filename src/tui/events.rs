@@ -3,7 +3,7 @@ use super::{
     screens::{InputMode, Screen},
 };
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::process::Command;
@@ -17,10 +17,17 @@ pub fn run_loop(
         app.poll_background();
         terminal.draw(|frame| super::ui::draw(frame, app))?;
         if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if handle_key(terminal, app, key)? {
-                    break;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if handle_key(terminal, app, key)? {
+                        break;
+                    }
                 }
+                Event::Paste(text) => handle_paste(app, &text),
+                _ => {}
             }
         }
     }
@@ -252,6 +259,25 @@ fn handle_input(
     Ok(false)
 }
 
+fn handle_paste(app: &mut App, text: &str) {
+    if accepts_text_input(app.input_mode) {
+        app.input.push_str(text.trim_end_matches(['\r', '\n']));
+    }
+}
+
+fn accepts_text_input(mode: InputMode) -> bool {
+    matches!(
+        mode,
+        InputMode::NewLoginProfileName
+            | InputMode::ImportDefault
+            | InputMode::ImportSub2
+            | InputMode::ShareTargetUser
+            | InputMode::RemoveSharedAccountConfirm
+            | InputMode::DeleteConfirm
+            | InputMode::DeleteSessionConfirm
+    )
+}
+
 fn submit_input(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -285,7 +311,7 @@ fn submit_input(
             app.set_message(format!("Imported ~/.codex as account {name}"));
         }
         InputMode::ImportSub2 => {
-            let json = app.input.trim();
+            let json = normalize_import_path(&app.input);
             let (name, _) = crate::profile::import_sub2_json(json, None)?;
             app.refresh_profiles()?;
             app.set_message(format!("Imported JSON as account {name}"));
@@ -390,6 +416,98 @@ fn submit_input(
         app.input_mode = InputMode::None;
     }
     Ok(())
+}
+
+fn normalize_import_path(input: &str) -> String {
+    let trimmed = input.trim();
+    let cleaned = trim_path_quotes(trimmed).to_string();
+    if std::path::Path::new(&cleaned).exists() {
+        return cleaned;
+    }
+    collapse_repeated_pairs(trimmed)
+        .map(|value| trim_path_quotes(&value).to_string())
+        .filter(|value| std::path::Path::new(value).exists())
+        .unwrap_or(cleaned)
+}
+
+fn trim_path_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value)
+        .trim()
+}
+
+fn collapse_repeated_pairs(value: &str) -> Option<String> {
+    let mut chars = value.chars();
+    let mut out = String::new();
+    loop {
+        let Some(first) = chars.next() else {
+            return Some(out);
+        };
+        let second = chars.next()?;
+        if first != second {
+            return None;
+        }
+        out.push(first);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collapse_repeated_pairs, normalize_import_path};
+
+    #[test]
+    fn collapse_repeated_pairs_restores_duplicated_windows_path() {
+        let duplicated = duplicate_chars(r#""C:\Users\Tianhui\Downloads\sub2.json""#);
+        assert_eq!(
+            collapse_repeated_pairs(&duplicated),
+            Some(r#""C:\Users\Tianhui\Downloads\sub2.json""#.to_string())
+        );
+    }
+
+    #[test]
+    fn collapse_repeated_pairs_rejects_mixed_text() {
+        assert_eq!(collapse_repeated_pairs("C:\\Users\\file.json"), None);
+    }
+
+    #[test]
+    fn normalize_import_path_trims_quotes_when_path_exists() {
+        let path = temp_json_path("quoted");
+        std::fs::write(&path, "{}").unwrap();
+
+        let input = format!(r#""{}""#, path.display());
+        assert_eq!(normalize_import_path(&input), path.to_string_lossy());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn normalize_import_path_restores_duplicated_path_when_path_exists() {
+        let path = temp_json_path("duplicated");
+        std::fs::write(&path, "{}").unwrap();
+
+        let quoted = format!(r#""{}""#, path.display());
+        let duplicated = duplicate_chars(&quoted);
+
+        assert_eq!(normalize_import_path(&duplicated), path.to_string_lossy());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn temp_json_path(name: &str) -> std::path::PathBuf {
+        let unique = uuid::Uuid::new_v4();
+        std::env::temp_dir().join(format!("codexhub-{name}-{unique}.json"))
+    }
+
+    fn duplicate_chars(value: &str) -> String {
+        value.chars().flat_map(|ch| [ch, ch]).collect()
+    }
 }
 
 fn start_input(app: &mut App, mode: InputMode) {
