@@ -20,11 +20,10 @@ pub struct UpdateInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallOutcome {
+    #[cfg_attr(windows, allow(dead_code))]
     Installed,
     #[cfg_attr(not(windows), allow(dead_code))]
-    ScheduledAfterExit {
-        log_path: PathBuf,
-    },
+    ScheduledAfterExit { log_path: PathBuf },
 }
 
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
@@ -172,6 +171,7 @@ fn run_command(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn cargo_command() -> Command {
     Command::new(cargo_program())
 }
