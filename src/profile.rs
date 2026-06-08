@@ -117,6 +117,8 @@ pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<
         .credentials
         .account_id
         .clone()
+        .or_else(|| account.credentials.chatgpt_account_id.clone())
+        .or_else(|| account_id_from_id_token(&account.credentials.access_token))
         .or_else(|| account_id_from_id_token(&account.credentials.id_token));
 
     let paths = config::init()?;
@@ -317,6 +319,7 @@ struct Sub2Credentials {
     refresh_token: String,
     id_token: String,
     account_id: Option<String>,
+    chatgpt_account_id: Option<String>,
     email: Option<String>,
     expires_at: Option<i64>,
     plan_type: Option<String>,
@@ -532,7 +535,10 @@ fn account_id_from_id_token(id_token: &str) -> Option<String> {
 fn find_account_id_value(value: &Value) -> Option<String> {
     match value {
         Value::Object(map) => map.iter().find_map(|(key, value)| {
-            if key.eq_ignore_ascii_case("account_id") || key.eq_ignore_ascii_case("accountId") {
+            if key.eq_ignore_ascii_case("account_id")
+                || key.eq_ignore_ascii_case("accountId")
+                || key.eq_ignore_ascii_case("chatgpt_account_id")
+            {
                 value.as_str().map(str::to_string)
             } else {
                 find_account_id_value(value)
@@ -695,6 +701,46 @@ mod tests {
         let auth: Value =
             serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
         assert!(auth["tokens"]["account_id"].is_null());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn imports_sub2_json_chatgpt_account_id_as_account_id() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("codexhub-sub2-chatgpt-account-id-test-{stamp}"));
+        let source = root.join("sub2.json");
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "accounts": [
+                {
+                  "name": "person@example.com",
+                  "platform": "openai",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "refresh_token": "refresh-value",
+                    "id_token": "id-value",
+                    "chatgpt_account_id": "chatgpt-account-value",
+                    "email": "person@example.com"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (_name, path) = import_sub2_json(&source, None).unwrap();
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert_eq!(auth["tokens"]["account_id"], "chatgpt-account-value");
 
         fs::remove_dir_all(&root).ok();
     }
