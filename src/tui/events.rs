@@ -150,6 +150,7 @@ fn handle_history(
         KeyCode::Char('r') => app.refresh_history_sessions()?,
         KeyCode::Char('d') => start_input(app, InputMode::DeleteSessionConfirm),
         KeyCode::Char('c') => start_continue_profile_select(app),
+        KeyCode::Char('p') => start_copy_profile_select(app),
         KeyCode::Enter => external_resume(terminal, app)?,
         _ => {}
     }
@@ -205,10 +206,20 @@ fn handle_input(
         KeyCode::Up if app.input_mode == InputMode::ImportSharedAccount => {
             app.move_shared_account_up();
         }
-        KeyCode::Down if app.input_mode == InputMode::ContinueProfile => {
+        KeyCode::Down
+            if matches!(
+                app.input_mode,
+                InputMode::ContinueProfile | InputMode::CopySessionProfile
+            ) =>
+        {
             app.move_continue_profile_down();
         }
-        KeyCode::Up if app.input_mode == InputMode::ContinueProfile => {
+        KeyCode::Up
+            if matches!(
+                app.input_mode,
+                InputMode::ContinueProfile | InputMode::CopySessionProfile
+            ) =>
+        {
             app.move_continue_profile_up();
         }
         KeyCode::Char('y') if app.input_mode == InputMode::UpdatePrompt => {
@@ -357,6 +368,11 @@ fn submit_input(
             app.input_mode = InputMode::None;
             app.input.clear();
         }
+        InputMode::CopySessionProfile => {
+            copy_session_to_selected_profile(app)?;
+            app.input_mode = InputMode::None;
+            app.input.clear();
+        }
         InputMode::UpdatePrompt => {
             install_update(terminal, app)?;
         }
@@ -391,6 +407,7 @@ fn start_input(app: &mut App, mode: InputMode) {
                 | InputMode::ImportSharedAccount
                 | InputMode::DeleteSessionConfirm
                 | InputMode::ContinueProfile
+                | InputMode::CopySessionProfile
         )
     {
         app.set_message("No account selected");
@@ -426,6 +443,14 @@ fn external_share_sudo_helper(
 }
 
 fn start_continue_profile_select(app: &mut App) {
+    start_history_target_profile_select(app, InputMode::ContinueProfile);
+}
+
+fn start_copy_profile_select(app: &mut App) {
+    start_history_target_profile_select(app, InputMode::CopySessionProfile);
+}
+
+fn start_history_target_profile_select(app: &mut App, mode: InputMode) {
     if app.profiles.is_empty() {
         app.set_message("No account available");
         return;
@@ -439,7 +464,7 @@ fn start_continue_profile_select(app: &mut App) {
         })
         .unwrap_or(0);
     app.selected_continue_profile = selected;
-    app.input_mode = InputMode::ContinueProfile;
+    app.input_mode = mode;
 }
 
 fn external_open(
@@ -519,6 +544,28 @@ fn external_continue_with_selected_profile(
     })?;
     app.refresh_profiles()?;
     app.refresh_history_sessions()?;
+    Ok(())
+}
+
+fn copy_session_to_selected_profile(app: &mut App) -> Result<()> {
+    let Some(session) = app.current_history_session() else {
+        app.set_message("No history session selected");
+        return Ok(());
+    };
+    let Some(target) = app.current_continue_profile_name() else {
+        app.set_message("No target profile selected");
+        return Ok(());
+    };
+    crate::profile::ensure_exists(&target)?;
+    crate::process::copy_session_to_profile(&session, &target)?;
+    crate::activation::activate_profile(&target)?;
+    app.active_profile = Some(target.clone());
+    app.refresh_profiles()?;
+    app.refresh_history_sessions()?;
+    app.set_message(format!(
+        "Copied session {} to {target}. Restart Codex Desktop to use it.",
+        session.session_id
+    ));
     Ok(())
 }
 

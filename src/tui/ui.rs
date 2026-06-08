@@ -455,6 +455,7 @@ fn draw_history(frame: &mut Frame<'_>, app: &App) {
                 &[
                     ("Enter", "resume"),
                     ("c", "continue as"),
+                    ("p", "copy to"),
                     ("d", "delete"),
                     ("a", "all/current"),
                 ],
@@ -904,7 +905,7 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                 ),
             )
         }
-        InputMode::ContinueProfile => return,
+        InputMode::ContinueProfile | InputMode::CopySessionProfile => return,
         InputMode::UpdatePrompt => return draw_update_popup(frame, app, area),
         InputMode::Message => ("Message", app.message.clone()),
         InputMode::None => return,
@@ -1040,9 +1041,16 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
         Row::new(["Account", "State", "5h", "7day", "Member"])
             .style(widgets::header_style(app.theme)),
     )
-    .block(widgets::block("Continue With Account", app.theme))
+    .block(widgets::block(history_target_popup_title(app), app.theme))
     .style(Style::default().fg(app.theme.text).bg(app.theme.panel));
     frame.render_widget(table, area);
+}
+
+fn history_target_popup_title(app: &App) -> &'static str {
+    match app.input_mode {
+        InputMode::CopySessionProfile => "Copy To Account",
+        _ => "Continue With Account",
+    }
 }
 
 fn draw_import_shared_account_popup(frame: &mut Frame<'_>, app: &App, area: Rect) {

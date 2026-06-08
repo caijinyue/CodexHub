@@ -91,34 +91,35 @@ pub fn codex_resume_session(session: &HistorySession) -> Result<i32> {
 }
 
 pub fn codex_resume_copied_session(session: &HistorySession, target_profile: &str) -> Result<i32> {
-    if session.is_codexhub_profile {
-        if session.profile == target_profile {
-            return codex_resume(target_profile, &session.session_id);
-        }
-        let path = session
-            .path
-            .as_deref()
-            .context("Selected session does not expose a rollout path")?;
-        profile::copy_session_to_profile(
-            &session.profile,
-            target_profile,
-            &session.session_id,
-            path,
-        )?;
-        return codex_resume(target_profile, &session.session_id);
+    copy_session_to_profile(session, target_profile)?;
+    codex_resume(target_profile, &session.session_id)
+}
+
+pub fn copy_session_to_profile(session: &HistorySession, target_profile: &str) -> Result<()> {
+    if session.is_codexhub_profile && session.profile == target_profile {
+        return Ok(());
     }
 
     let path = session
         .path
         .as_deref()
         .context("Selected session does not expose a rollout path")?;
-    profile::copy_session_root_to_profile(
-        &session.codex_home,
-        target_profile,
-        &session.session_id,
-        path,
-    )?;
-    codex_resume(target_profile, &session.session_id)
+    if session.is_codexhub_profile {
+        profile::copy_session_to_profile(
+            &session.profile,
+            target_profile,
+            &session.session_id,
+            path,
+        )?;
+    } else {
+        profile::copy_session_root_to_profile(
+            &session.codex_home,
+            target_profile,
+            &session.session_id,
+            path,
+        )?;
+    }
+    Ok(())
 }
 
 pub fn session_preview_messages(session: &HistorySession, max_lines: usize) -> Vec<PreviewMessage> {

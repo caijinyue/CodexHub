@@ -24,6 +24,7 @@ pub enum InputMode {
     DeleteConfirm,
     DeleteSessionConfirm,
     ContinueProfile,
+    CopySessionProfile,
     UpdatePrompt,
     Message,
 }
