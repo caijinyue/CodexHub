@@ -1,6 +1,7 @@
 use crate::config;
 use crate::size;
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Local};
 use serde::Deserialize;
 use serde_json::json;
@@ -112,6 +113,11 @@ pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<
             .context("sub2 account does not contain an email address; pass a profile name")?,
     };
     config::ensure_profile_name(name.as_str())?;
+    let account_id = account
+        .credentials
+        .account_id
+        .clone()
+        .or_else(|| account_id_from_id_token(&account.credentials.id_token));
 
     let paths = config::init()?;
     let target = paths.profiles.join(&name);
@@ -133,7 +139,7 @@ pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<
             "id_token": account.credentials.id_token,
             "access_token": account.credentials.access_token,
             "refresh_token": account.credentials.refresh_token,
-            "account_id": account.credentials.account_id,
+            "account_id": account_id,
         },
         "plan_expires_at": account.credentials.expires_at,
         "plan_type": account.credentials.plan_type,
@@ -316,7 +322,7 @@ struct Sub2Credentials {
     access_token: String,
     refresh_token: String,
     id_token: String,
-    account_id: String,
+    account_id: Option<String>,
     email: Option<String>,
     expires_at: Option<i64>,
     plan_type: Option<String>,
@@ -522,6 +528,27 @@ fn find_email_value(value: &Value) -> Option<String> {
     }
 }
 
+fn account_id_from_id_token(id_token: &str) -> Option<String> {
+    let payload = id_token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    find_account_id_value(&value)
+}
+
+fn find_account_id_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => map.iter().find_map(|(key, value)| {
+            if key.eq_ignore_ascii_case("account_id") || key.eq_ignore_ascii_case("accountId") {
+                value.as_str().map(str::to_string)
+            } else {
+                find_account_id_value(value)
+            }
+        }),
+        Value::Array(items) => items.iter().find_map(find_account_id_value),
+        _ => None,
+    }
+}
+
 fn email_like(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.len() <= 254
@@ -636,6 +663,90 @@ mod tests {
 
         assert_eq!(name, "named-profile");
         assert!(path.join("auth.json").is_file());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn imports_sub2_json_without_account_id() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-sub2-no-account-id-test-{stamp}"));
+        let source = root.join("sub2.json");
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "accounts": [
+                {
+                  "name": "person@example.com",
+                  "platform": "openai",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "refresh_token": "refresh-value",
+                    "id_token": "id-value",
+                    "email": "person@example.com"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (_name, path) = import_sub2_json(&source, None).unwrap();
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert!(auth["tokens"]["account_id"].is_null());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn imports_sub2_json_account_id_from_id_token() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("codexhub-sub2-id-token-account-test-{stamp}"));
+        let source = root.join("sub2.json");
+        let id_token = test_id_token(json!({
+            "nested": {
+                "account_id": "account-from-token"
+            }
+        }));
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            format!(
+                r#"{{
+                  "accounts": [
+                    {{
+                      "name": "person@example.com",
+                      "platform": "openai",
+                      "credentials": {{
+                        "access_token": "access-value",
+                        "refresh_token": "refresh-value",
+                        "id_token": "{id_token}",
+                        "email": "person@example.com"
+                      }}
+                    }}
+                  ]
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        let (_name, path) = import_sub2_json(&source, None).unwrap();
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert_eq!(auth["tokens"]["account_id"], "account-from-token");
 
         fs::remove_dir_all(&root).ok();
     }
@@ -758,5 +869,11 @@ mod tests {
             total_size: 0,
             shared_cache: false,
         }
+    }
+
+    fn test_id_token(payload: Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.signature")
     }
 }
