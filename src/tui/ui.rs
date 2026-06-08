@@ -814,7 +814,10 @@ fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_popup(frame: &mut Frame<'_>, app: &App) {
-    if app.input_mode == InputMode::ContinueProfile {
+    if matches!(
+        app.input_mode,
+        InputMode::ContinueProfile | InputMode::CopySessionProfile
+    ) {
         draw_continue_profile_popup(frame, app);
         return;
     }
