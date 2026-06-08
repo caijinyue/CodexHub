@@ -695,23 +695,28 @@ fn install_update(
         app.input_mode = InputMode::None;
         return Ok(());
     };
-    let result = run_suspended(terminal, || {
-        crate::update::install_update(&info.repo_path)?;
-        Ok(0)
-    });
+    let result = run_suspended(terminal, || crate::update::install_update(&info.repo_path));
     app.update_info = None;
     app.input_mode = InputMode::None;
     match result {
-        Ok(_) => app.set_message("Update installed. Restart CodexHub to use the new binary."),
+        Ok(crate::update::InstallOutcome::Installed) => {
+            app.set_message("Update installed. Restart CodexHub to use the new binary.")
+        }
+        Ok(crate::update::InstallOutcome::ScheduledAfterExit { log_path }) => {
+            app.set_message(format!(
+                "Update scheduled. Quit CodexHub, wait for install, then reopen. Log: {}",
+                log_path.display()
+            ));
+        }
         Err(err) => app.set_message(format!("Update failed: {err}")),
     }
     Ok(())
 }
 
-fn run_suspended(
+fn run_suspended<T>(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    run: impl FnOnce() -> Result<i32>,
-) -> Result<i32> {
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     super::suspend_terminal(terminal)?;
     let result = run();
     let resume_result = super::resume_terminal(terminal);

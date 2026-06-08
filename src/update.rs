@@ -18,6 +18,15 @@ pub struct UpdateInfo {
     pub repo_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallOutcome {
+    Installed,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    ScheduledAfterExit {
+        log_path: PathBuf,
+    },
+}
+
 pub fn check_for_update() -> Result<Option<UpdateInfo>> {
     let repo_path = repo_path();
     let local_head = local_build_head(&repo_path)?;
@@ -47,8 +56,13 @@ pub fn check_for_update() -> Result<Option<UpdateInfo>> {
     }))
 }
 
-pub fn install_update(repo_path: &Path) -> Result<()> {
+pub fn install_update(repo_path: &Path) -> Result<InstallOutcome> {
     run_git(repo_path, &["pull", "--ff-only"])?;
+    install_pulled_update(repo_path)
+}
+
+#[cfg(not(windows))]
+fn install_pulled_update(repo_path: &Path) -> Result<InstallOutcome> {
     run_command(
         cargo_command()
             .args(["install", "--path"])
@@ -57,7 +71,30 @@ pub fn install_update(repo_path: &Path) -> Result<()> {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit()),
     )
-    .context("Installing updated codexhub")
+    .context("Installing updated codexhub")?;
+    Ok(InstallOutcome::Installed)
+}
+
+#[cfg(windows)]
+fn install_pulled_update(repo_path: &Path) -> Result<InstallOutcome> {
+    let log_path = env::temp_dir().join("codexhub-update.log");
+    let script = windows_update_script(repo_path, &log_path);
+    Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("Scheduling updated codexhub install after exit")?;
+    Ok(InstallOutcome::ScheduledAfterExit { log_path })
 }
 
 fn repo_path() -> PathBuf {
@@ -136,18 +173,45 @@ fn run_command(command: &mut Command) -> Result<()> {
 }
 
 fn cargo_command() -> Command {
+    Command::new(cargo_program())
+}
+
+fn cargo_program() -> PathBuf {
     if let Ok(cargo) = env::var("CARGO") {
         if !cargo.trim().is_empty() {
-            return Command::new(cargo);
+            return PathBuf::from(cargo);
         }
     }
     if let Some(home) = dirs::home_dir() {
+        #[cfg(windows)]
+        {
+            let rustup_cargo = home.join(".cargo/bin/cargo.exe");
+            if rustup_cargo.exists() {
+                return rustup_cargo;
+            }
+        }
         let rustup_cargo = home.join(".cargo/bin/cargo");
         if rustup_cargo.exists() {
-            return Command::new(rustup_cargo);
+            return rustup_cargo;
         }
     }
-    Command::new("cargo")
+    PathBuf::from("cargo")
+}
+
+#[cfg(windows)]
+fn windows_update_script(repo_path: &Path, log_path: &Path) -> String {
+    let pid = std::process::id();
+    let cargo = ps_single_quote(&cargo_program().to_string_lossy());
+    let repo = ps_single_quote(&repo_path.to_string_lossy());
+    let log = ps_single_quote(&log_path.to_string_lossy());
+    format!(
+        "$ErrorActionPreference = 'Stop'; if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Wait-Process -Id {pid} }}; & '{cargo}' install --path '{repo}' --locked *> '{log}'"
+    )
+}
+
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn ps_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,5 +314,10 @@ mod tests {
             local_build_head(Path::new("/does/not/matter")).unwrap(),
             env!("CODEXHUB_BUILD_GIT_HEAD").to_string()
         );
+    }
+
+    #[test]
+    fn quotes_powershell_single_quoted_strings() {
+        assert_eq!(ps_single_quote(r"C:\Users\O'Brien"), r"C:\Users\O''Brien");
     }
 }
