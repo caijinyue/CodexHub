@@ -684,7 +684,7 @@ fn draw_share_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let visible = usize::from(area.height.saturating_sub(2)).max(1);
+    let visible = visible_session_items(area.height);
     let start = app
         .selected_history
         .saturating_add(1)
@@ -732,6 +732,10 @@ fn draw_session_list(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .style(Style::default().fg(app.theme.text).bg(app.theme.surface)),
         area,
     );
+}
+
+fn visible_session_items(area_height: u16) -> usize {
+    usize::from(area_height.saturating_sub(2) / 2).max(1)
 }
 
 fn draw_session_detail(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1280,4 +1284,16 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_session_items;
+
+    #[test]
+    fn counts_two_line_history_items() {
+        assert_eq!(visible_session_items(22), 10);
+        assert_eq!(visible_session_items(5), 1);
+        assert_eq!(visible_session_items(1), 1);
+    }
 }

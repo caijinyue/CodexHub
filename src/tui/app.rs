@@ -466,15 +466,18 @@ fn preserve_account_status(
 }
 
 fn all_history_sessions(names: Vec<String>) -> Vec<process::HistorySession> {
+    const HISTORY_LIMIT: usize = 1000;
     let mut handles: Vec<_> = names
         .into_iter()
         .map(|name| {
-            thread::spawn(move || process::codex_history_sessions(&name, 200).unwrap_or_default())
+            thread::spawn(move || {
+                process::codex_history_sessions(&name, HISTORY_LIMIT).unwrap_or_default()
+            })
         })
         .collect();
     if let Some(home) = default_codex_history_home() {
         handles.push(thread::spawn(move || {
-            process::codex_history_sessions_from_home("~/.codex", home, false, 200)
+            process::codex_history_sessions_from_home("~/.codex", home, false, HISTORY_LIMIT)
                 .unwrap_or_default()
         }));
     }
