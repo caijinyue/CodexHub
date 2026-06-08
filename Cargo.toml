@@ -14,6 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 dirs = "5"
+encoding_rs = "0.8"
 fs_extra = "1"
 humansize = "2"
 rand_core = { version = "0.6", features = ["std"] }

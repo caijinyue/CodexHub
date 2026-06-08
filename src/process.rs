@@ -2,7 +2,7 @@ use crate::profile;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::fs::{self, File};
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -126,14 +126,13 @@ pub fn session_preview_messages(session: &HistorySession, max_lines: usize) -> V
     let Some(path) = session.path.as_deref() else {
         return vec![PreviewMessage::system("No rollout file path available.")];
     };
-    let Ok(file) = File::open(path) else {
+    let Ok(data) = crate::text_encoding::read_to_string(Path::new(path)) else {
         return vec![PreviewMessage::system(format!(
             "Cannot open rollout file: {path}"
         ))];
     };
-    let reader = BufReader::new(file);
     let mut messages = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
+    for line in data.lines() {
         if let Some(message) = preview_line(&line) {
             push_preview_message(&mut messages, message);
         }
@@ -403,8 +402,11 @@ fn parse_history_sessions(
                     title: thread
                         .name
                         .filter(|name| !name.trim().is_empty())
+                        .map(|name| crate::text_encoding::repair_mojibake(&name))
                         .unwrap_or_else(|| trim_preview(&thread.preview)),
-                    cwd: thread.cwd,
+                    cwd: thread
+                        .cwd
+                        .map(|cwd| crate::text_encoding::repair_mojibake(&cwd)),
                     path: thread.path,
                     updated_at: thread.updated_at,
                 })
@@ -423,7 +425,7 @@ fn local_history_sessions(
     limit: usize,
 ) -> Vec<HistorySession> {
     let index = home.join("session_index.jsonl");
-    let Ok(data) = fs::read_to_string(&index) else {
+    let Ok(data) = crate::text_encoding::read_to_string(&index) else {
         return Vec::new();
     };
     let mut sessions: Vec<_> = data
@@ -460,6 +462,7 @@ fn local_history_session(
         title: value
             .thread_name
             .filter(|name| !name.trim().is_empty())
+            .map(|name| crate::text_encoding::repair_mojibake(&name))
             .unwrap_or_else(|| "(untitled)".into()),
         cwd,
         path,
@@ -485,9 +488,8 @@ fn find_session_rollout(home: &Path, session_id: &str) -> Option<PathBuf> {
 }
 
 fn session_meta_cwd(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
-    let mut lines = BufReader::new(file).lines();
-    let line = lines.next()?.ok()?;
+    let data = crate::text_encoding::read_to_string(path).ok()?;
+    let line = data.lines().next()?;
     let value: Value = serde_json::from_str(&line).ok()?;
     if value.pointer("/type").and_then(Value::as_str) != Some("session_meta") {
         return None;
@@ -502,7 +504,7 @@ fn remove_session_index_line(path: &Path, session_id: &str) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let data = fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
+    let data = crate::text_encoding::read_to_string(path)?;
     let kept: Vec<_> = data
         .lines()
         .filter(|line| !line.contains(session_id))
@@ -511,12 +513,13 @@ fn remove_session_index_line(path: &Path, session_id: &str) -> Result<()> {
     if !output.is_empty() {
         output.push('\n');
     }
-    fs::write(path, output).with_context(|| format!("Writing {}", path.display()))?;
+    crate::text_encoding::write_utf8(path, &output)?;
     Ok(())
 }
 
 fn trim_preview(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let repaired = crate::text_encoding::repair_mojibake(text);
+    let collapsed = repaired.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         "(untitled)".into()
     } else if collapsed.chars().count() > 80 {
@@ -594,7 +597,10 @@ fn message_content_text(content: &Value) -> Option<String> {
 }
 
 fn clean_preview_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    crate::text_encoding::repair_mojibake(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn push_wrapped_preview(out: &mut Vec<String>, text: &str, width: usize) {
@@ -885,6 +891,75 @@ mod tests {
                     text: "same user".into()
                 },
             ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn decodes_gbk_rollout_preview() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-preview-gbk-test-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout.jsonl");
+        let line =
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"中文 prompt"}}"#;
+        let (bytes, _, _) = encoding_rs::GBK.encode(line);
+        std::fs::write(&path, bytes.as_ref()).unwrap();
+        let session = HistorySession {
+            profile: "work".into(),
+            codex_home: root.clone(),
+            session_id: "s1".into(),
+            title: "test".into(),
+            updated_at: 1,
+            cwd: None,
+            path: Some(path.display().to_string()),
+            is_codexhub_profile: true,
+        };
+
+        assert_eq!(
+            session_preview_messages(&session, 10),
+            vec![PreviewMessage {
+                role: PreviewRole::User,
+                text: "中文 prompt".into()
+            }]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repairs_mojibake_rollout_preview() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-preview-mojibake-test-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"ä¸­æ–‡ prompt"}}"#,
+        )
+        .unwrap();
+        let session = HistorySession {
+            profile: "work".into(),
+            codex_home: root.clone(),
+            session_id: "s1".into(),
+            title: "test".into(),
+            updated_at: 1,
+            cwd: None,
+            path: Some(path.display().to_string()),
+            is_codexhub_profile: true,
+        };
+
+        assert_eq!(
+            session_preview_messages(&session, 10),
+            vec![PreviewMessage {
+                role: PreviewRole::User,
+                text: "中文 prompt".into()
+            }]
         );
         std::fs::remove_dir_all(root).unwrap();
     }

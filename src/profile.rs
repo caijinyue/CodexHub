@@ -208,13 +208,7 @@ pub fn copy_session_root_to_profile(
     if let Some(parent) = target_session_path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
     }
-    fs::copy(&source_session_path, &target_session_path).with_context(|| {
-        format!(
-            "Copying {} to {}",
-            source_session_path.display(),
-            target_session_path.display()
-        )
-    })?;
+    crate::text_encoding::copy_as_utf8(&source_session_path, &target_session_path)?;
     copy_session_index_line(&source_root, &target_root, session_id)?;
     Ok(target_session_path)
 }
@@ -266,15 +260,15 @@ fn copy_session_index_line(source_root: &Path, target_root: &Path, session_id: &
         return Ok(());
     }
     let target = target_root.join("session_index.jsonl");
-    let existing = fs::read_to_string(&target).unwrap_or_default();
+    let existing = crate::text_encoding::read_to_string(&target).unwrap_or_default();
     if existing.lines().any(|line| line.contains(session_id)) {
         return Ok(());
     }
-    let source_data =
-        fs::read_to_string(&source).with_context(|| format!("Reading {}", source.display()))?;
+    let source_data = crate::text_encoding::read_to_string(&source)?;
     let Some(line) = source_data.lines().find(|line| line.contains(session_id)) else {
         return Ok(());
     };
+    let line = crate::text_encoding::repair_mojibake(line);
     use std::io::Write;
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -814,6 +808,47 @@ mod tests {
         assert!(fs::read_to_string(target.join("session_index.jsonl"))
             .unwrap()
             .contains("test-session"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn copies_gbk_session_as_utf8() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-copy-gbk-session-test-{stamp}"));
+        std::env::set_var("CODEXHUB_HOME", &root);
+        let source = create("source", false).unwrap();
+        let target = create("target", false).unwrap();
+        let session = source
+            .join("sessions")
+            .join("2026")
+            .join("06")
+            .join("08")
+            .join("rollout-test-session.jsonl");
+        fs::create_dir_all(session.parent().unwrap()).unwrap();
+        let rollout =
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"中文 prompt"}}"#;
+        let (rollout_bytes, _, _) = encoding_rs::GBK.encode(rollout);
+        fs::write(&session, rollout_bytes.as_ref()).unwrap();
+        let index = r#"{"id":"test-session","thread_name":"ä¸­æ–‡ title","updated_at":"2026-06-08T00:00:00Z"}"#;
+        fs::write(source.join("session_index.jsonl"), index).unwrap();
+
+        let copied = copy_session_to_profile(
+            "source",
+            "target",
+            "test-session",
+            session.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(copied).unwrap(), rollout);
+        assert!(fs::read_to_string(target.join("session_index.jsonl"))
+            .unwrap()
+            .contains("中文 title"));
 
         fs::remove_dir_all(&root).ok();
     }

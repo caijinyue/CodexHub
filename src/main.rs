@@ -9,6 +9,7 @@ mod shared;
 mod shared_account;
 mod shell;
 mod size;
+mod text_encoding;
 mod tui;
 mod update;
 
