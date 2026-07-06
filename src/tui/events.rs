@@ -128,6 +128,19 @@ fn handle_settings(app: &mut App, key: KeyEvent) -> Result<bool> {
             app.decrease_quota_refresh_interval()?;
         }
         KeyCode::Char('r') => app.force_status_refresh(),
+        KeyCode::Char('p') => {
+            if let Err(err) = app.cycle_proxy_mode() {
+                app.set_message(format!("Cannot change proxy mode: {err}"));
+            }
+        }
+        KeyCode::Char('1') => start_proxy_input(app, InputMode::ProxyHttp),
+        KeyCode::Char('2') => start_proxy_input(app, InputMode::ProxyHttps),
+        KeyCode::Char('3') => start_proxy_input(app, InputMode::ProxyAll),
+        KeyCode::Char('n') => start_proxy_input(app, InputMode::ProxyNoProxy),
+        KeyCode::Char('x') => match crate::proxy::test_connection(&app.proxy) {
+            Ok(message) => app.set_message(message),
+            Err(err) => app.set_message(format!("Proxy test failed: {err:#}")),
+        },
         _ => {}
     }
     Ok(false)
@@ -250,6 +263,10 @@ fn handle_input(
                     | InputMode::RemoveSharedAccountConfirm
                     | InputMode::DeleteConfirm
                     | InputMode::DeleteSessionConfirm
+                    | InputMode::ProxyHttp
+                    | InputMode::ProxyHttps
+                    | InputMode::ProxyAll
+                    | InputMode::ProxyNoProxy
             ) {
                 app.input.push(ch);
             }
@@ -275,6 +292,10 @@ fn accepts_text_input(mode: InputMode) -> bool {
             | InputMode::RemoveSharedAccountConfirm
             | InputMode::DeleteConfirm
             | InputMode::DeleteSessionConfirm
+            | InputMode::ProxyHttp
+            | InputMode::ProxyHttps
+            | InputMode::ProxyAll
+            | InputMode::ProxyNoProxy
     )
 }
 
@@ -398,6 +419,24 @@ fn submit_input(
             copy_session_to_selected_profile(app)?;
             app.input_mode = InputMode::None;
             app.input.clear();
+        }
+        InputMode::ProxyHttp
+        | InputMode::ProxyHttps
+        | InputMode::ProxyAll
+        | InputMode::ProxyNoProxy => {
+            let mode = app.input_mode;
+            let value = app.input.trim().to_string();
+            let label = match mode {
+                InputMode::ProxyHttp => "HTTP proxy",
+                InputMode::ProxyHttps => "HTTPS proxy",
+                InputMode::ProxyAll => "ALL proxy",
+                InputMode::ProxyNoProxy => "NO_PROXY",
+                _ => unreachable!(),
+            };
+            match app.save_proxy_value(mode, value) {
+                Ok(()) => app.set_message(format!("{label} updated")),
+                Err(err) => app.set_message(format!("Invalid {label}: {err:#}")),
+            }
         }
         InputMode::UpdatePrompt => {
             install_update(terminal, app)?;
@@ -532,6 +571,11 @@ fn start_input(app: &mut App, mode: InputMode) {
     } else {
         app.input_mode = mode;
     }
+}
+
+fn start_proxy_input(app: &mut App, mode: InputMode) {
+    app.input = app.proxy_value(mode).to_string();
+    app.input_mode = mode;
 }
 
 fn external_share_sudo_helper(

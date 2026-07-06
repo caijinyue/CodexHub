@@ -25,6 +25,10 @@ pub enum InputMode {
     DeleteSessionConfirm,
     ContinueProfile,
     CopySessionProfile,
+    ProxyHttp,
+    ProxyHttps,
+    ProxyAll,
+    ProxyNoProxy,
     UpdatePrompt,
     Message,
 }

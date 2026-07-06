@@ -87,6 +87,10 @@ enum Commands {
         #[command(subcommand)]
         command: RemoteCommands,
     },
+    Proxy {
+        #[command(subcommand)]
+        command: ProxyCommands,
+    },
     Tui,
 }
 
@@ -110,6 +114,27 @@ enum SharedAccountCommands {
 #[derive(Debug, Subcommand)]
 enum RemoteCommands {
     Password { password: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProxyCommands {
+    Set {
+        #[arg(long)]
+        http: Option<String>,
+        #[arg(long)]
+        https: Option<String>,
+        #[arg(long)]
+        all: Option<String>,
+        #[arg(long)]
+        no_proxy: Option<String>,
+    },
+    Mode {
+        #[arg(value_enum)]
+        mode: config::ProxyMode,
+    },
+    Show,
+    Clear,
+    Test,
 }
 
 pub fn run() -> Result<()> {
@@ -216,9 +241,74 @@ pub fn run() -> Result<()> {
                 println!("Remote password updated");
             }
         },
+        Commands::Proxy { command } => handle_proxy_command(command)?,
         Commands::Tui => tui::run()?,
     }
     Ok(())
+}
+
+fn handle_proxy_command(command: ProxyCommands) -> Result<()> {
+    let mut app_config = config::load()?;
+    match command {
+        ProxyCommands::Set {
+            http,
+            https,
+            all,
+            no_proxy,
+        } => {
+            if let Some(value) = http {
+                app_config.proxy.http = value;
+            }
+            if let Some(value) = https {
+                app_config.proxy.https = value;
+            }
+            if let Some(value) = all {
+                app_config.proxy.all = value;
+            }
+            if let Some(value) = no_proxy {
+                app_config.proxy.no_proxy = value;
+            }
+            app_config.proxy.mode = config::ProxyMode::Custom;
+            crate::proxy::validate(&app_config.proxy)?;
+            config::save(&app_config)?;
+            println!("Proxy configured in custom mode");
+            print_proxy(&app_config.proxy);
+        }
+        ProxyCommands::Mode { mode } => {
+            app_config.proxy.mode = mode;
+            crate::proxy::validate(&app_config.proxy)?;
+            config::save(&app_config)?;
+            println!("Proxy mode: {mode}");
+        }
+        ProxyCommands::Show => print_proxy(&app_config.proxy),
+        ProxyCommands::Clear => {
+            app_config.proxy = config::ProxyConfig {
+                mode: config::ProxyMode::Off,
+                ..config::ProxyConfig::default()
+            };
+            config::save(&app_config)?;
+            println!("Proxy configuration cleared; mode is off");
+        }
+        ProxyCommands::Test => {
+            println!("{}", crate::proxy::test_connection(&app_config.proxy)?);
+        }
+    }
+    Ok(())
+}
+
+fn print_proxy(proxy: &config::ProxyConfig) {
+    let display = |value: &str| {
+        if value.is_empty() {
+            "(not set)".to_string()
+        } else {
+            crate::proxy::masked(value)
+        }
+    };
+    println!("mode: {}", proxy.mode);
+    println!("http: {}", display(&proxy.http));
+    println!("https: {}", display(&proxy.https));
+    println!("all: {}", display(&proxy.all));
+    println!("no_proxy: {}", display(&proxy.no_proxy));
 }
 
 fn print_list() -> Result<()> {

@@ -474,6 +474,11 @@ fn draw_settings(frame: &mut Frame<'_>, app: &App) {
     let rows = vec![
         detail_row("Theme", app.theme_label()),
         detail_row("Quota refresh", app.quota_refresh_label()),
+        detail_row("Proxy mode", app.proxy.mode.to_string()),
+        detail_row("HTTP proxy", proxy_setting_value(&app.proxy.http)),
+        detail_row("HTTPS proxy", proxy_setting_value(&app.proxy.https)),
+        detail_row("ALL proxy", proxy_setting_value(&app.proxy.all)),
+        detail_row("NO_PROXY", proxy_setting_value(&app.proxy.no_proxy)),
         detail_row(
             "Refresh state",
             if app.status_loading {
@@ -494,9 +499,21 @@ fn draw_settings(frame: &mut Frame<'_>, app: &App) {
         chunks[1],
         &[
             ("Refresh", &[("+/-", "interval"), ("r", "refresh now")]),
+            (
+                "Proxy",
+                &[("p", "mode"), ("1/2/3/n", "edit"), ("x", "test")],
+            ),
             ("System", &[("t", "theme"), ("q", "back")]),
         ],
     );
+}
+
+fn proxy_setting_value(value: &str) -> String {
+    if value.is_empty() {
+        "(not set)".into()
+    } else {
+        crate::proxy::masked(value)
+    }
 }
 
 fn draw_remote(frame: &mut Frame<'_>, app: &App) {
@@ -910,6 +927,22 @@ fn draw_popup(frame: &mut Frame<'_>, app: &App) {
                     "Type \"{session_id}\" to delete this history session.\nThis removes the selected rollout file and local index entries.\n\n{}",
                     app.input
                 ),
+            )
+        }
+        InputMode::ProxyHttp
+        | InputMode::ProxyHttps
+        | InputMode::ProxyAll
+        | InputMode::ProxyNoProxy => {
+            let label = match app.input_mode {
+                InputMode::ProxyHttp => "HTTP proxy",
+                InputMode::ProxyHttps => "HTTPS proxy",
+                InputMode::ProxyAll => "ALL/SOCKS proxy",
+                InputMode::ProxyNoProxy => "NO_PROXY",
+                _ => unreachable!(),
+            };
+            (
+                "Proxy Setting",
+                format!("{label}: {}\nLeave empty to clear. Enter save, Esc cancel.", app.input),
             )
         }
         InputMode::ContinueProfile | InputMode::CopySessionProfile => return,

@@ -440,6 +440,7 @@ async fn spawn_session(state: RemoteState, request: StartSessionRequest) -> Resu
         .current_dir(config::expand_tilde(PathBuf::from(&cwd)))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::proxy::apply_tokio(&mut command)?;
     let mut child = command.spawn().context("Starting codex exec")?;
     let pid = child.id();
     let stdout = child.stdout.take();

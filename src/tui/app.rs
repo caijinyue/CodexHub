@@ -34,6 +34,7 @@ pub struct App {
     pub history_loading: bool,
     pub update_checking: bool,
     pub quota_refresh_secs: u64,
+    pub proxy: crate::config::ProxyConfig,
     last_status_refresh: Option<Instant>,
     pub theme: Theme,
     pub theme_preference: ThemePreference,
@@ -74,6 +75,7 @@ impl App {
             history_loading: false,
             update_checking: false,
             quota_refresh_secs: config.quota_refresh_secs,
+            proxy: config.proxy,
             last_status_refresh: None,
             theme: Theme::from_preference(theme_preference),
             theme_preference,
@@ -401,7 +403,50 @@ impl App {
     fn save_settings(&self) -> Result<()> {
         let mut config = crate::config::load()?;
         config.quota_refresh_secs = self.quota_refresh_secs;
+        config.proxy = self.proxy.clone();
         crate::config::save(&config)
+    }
+
+    pub fn cycle_proxy_mode(&mut self) -> Result<()> {
+        let mode = match self.proxy.mode {
+            crate::config::ProxyMode::Inherit => crate::config::ProxyMode::Off,
+            crate::config::ProxyMode::Off => crate::config::ProxyMode::Custom,
+            crate::config::ProxyMode::Custom => crate::config::ProxyMode::Inherit,
+        };
+        let mut candidate = self.proxy.clone();
+        candidate.mode = mode;
+        crate::proxy::validate(&candidate)?;
+        self.proxy = candidate;
+        self.save_settings()
+    }
+
+    pub fn save_proxy_value(&mut self, mode: InputMode, value: String) -> Result<()> {
+        let mut candidate = self.proxy.clone();
+        match mode {
+            InputMode::ProxyHttp => candidate.http = value,
+            InputMode::ProxyHttps => candidate.https = value,
+            InputMode::ProxyAll => candidate.all = value,
+            InputMode::ProxyNoProxy => candidate.no_proxy = value,
+            _ => return Ok(()),
+        }
+        if !candidate.http.is_empty() || !candidate.https.is_empty() || !candidate.all.is_empty() {
+            let original_mode = candidate.mode;
+            candidate.mode = crate::config::ProxyMode::Custom;
+            crate::proxy::validate(&candidate)?;
+            candidate.mode = original_mode;
+        }
+        self.proxy = candidate;
+        self.save_settings()
+    }
+
+    pub fn proxy_value(&self, mode: InputMode) -> &str {
+        match mode {
+            InputMode::ProxyHttp => &self.proxy.http,
+            InputMode::ProxyHttps => &self.proxy.https,
+            InputMode::ProxyAll => &self.proxy.all,
+            InputMode::ProxyNoProxy => &self.proxy.no_proxy,
+            _ => "",
+        }
     }
 
     pub fn theme_label(&self) -> String {

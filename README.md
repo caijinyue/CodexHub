@@ -181,11 +181,44 @@ codexhub shell <name>
 codexhub path <name>
 codexhub list
 codexhub doctor [--allow-auth-symlink]
+codexhub proxy set [--http URL] [--https URL] [--all URL] [--no-proxy HOSTS]
+codexhub proxy mode <inherit|off|custom>
+codexhub proxy show
+codexhub proxy test
+codexhub proxy clear
 codexhub share-cache <name>
 codexhub unshare-cache <name> [--restore-backup|--keep-empty]
 codexhub delete <name>
 codexhub tui
 ```
+
+## Per-CodexHub Proxy
+
+CodexHub can apply proxy variables only to the official Codex processes it starts. This avoids
+putting proxy exports in `.zshrc` or `.bashrc`, where they affect every terminal command.
+
+```bash
+codexhub proxy set \
+  --http http://127.0.0.1:27183 \
+  --https http://127.0.0.1:27183 \
+  --all socks5://127.0.0.1:27183
+codexhub proxy test
+```
+
+The proxy has three modes:
+
+- `inherit` keeps proxy variables inherited from the terminal. This is the upgrade-safe default.
+- `off` explicitly removes inherited proxy variables from Codex child processes.
+- `custom` sets the configured `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` values,
+  together with their uppercase variants.
+
+The setting covers login, run, exec, resume, account-status queries, remote sessions, and
+`codexhub shell`. The shell command creates a proxy-scoped child shell; its environment disappears
+when that shell exits. `codexhub activate` does not publish proxy variables to the desktop or user
+environment, so Codex launched outside CodexHub does not receive this proxy.
+
+The same values can be edited from the TUI Settings screen. Proxy credentials are masked in display
+output, and `~/.codexhub/config.toml` is restricted to the current user on Unix.
 
 ## Architecture
 

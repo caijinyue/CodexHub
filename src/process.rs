@@ -1,4 +1,4 @@
-use crate::profile;
+use crate::{profile, proxy};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -178,12 +178,15 @@ fn run_codex_home<'a, I>(home: &std::path::Path, args: I) -> Result<i32>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    let status = Command::new("codex")
+    let mut command = Command::new("codex");
+    command
         .args(args)
         .env("CODEX_HOME", home)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    proxy::apply(&mut command)?;
+    let status = command
         .status()
         .with_context(|| "Failed to execute official codex CLI")?;
     Ok(status.code().unwrap_or(1))
@@ -274,12 +277,15 @@ fn app_server_request_home(
     request_id: u64,
     request: &str,
 ) -> Result<String> {
-    let mut child = Command::new("codex")
+    let mut command = Command::new("codex");
+    command
         .args(["app-server", "--listen", "stdio://"])
         .env("CODEX_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    proxy::apply(&mut command)?;
+    let mut child = command
         .spawn()
         .with_context(|| "Failed to start official codex app-server")?;
 

@@ -4,6 +4,7 @@ mod config;
 mod doctor;
 mod process;
 mod profile;
+mod proxy;
 mod remote;
 mod shared;
 mod shared_account;
