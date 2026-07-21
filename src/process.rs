@@ -13,7 +13,9 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountStatus {
     pub plan_type: Option<String>,
+    pub primary_label: String,
     pub primary_remaining_percent: Option<u8>,
+    pub secondary_label: String,
     pub secondary_remaining_percent: Option<u8>,
     pub primary_resets_at: Option<chrono::DateTime<chrono::Local>>,
     pub secondary_resets_at: Option<chrono::DateTime<chrono::Local>>,
@@ -352,10 +354,20 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
             let limits = value.result?.rate_limits;
             return Some(AccountStatus {
                 plan_type: limits.plan_type,
+                primary_label: limits
+                    .primary
+                    .as_ref()
+                    .map(rate_limit_label)
+                    .unwrap_or_else(|| "primary".into()),
                 primary_remaining_percent: limits
                     .primary
                     .as_ref()
                     .and_then(|w| remaining_percent(w.used_percent)),
+                secondary_label: limits
+                    .secondary
+                    .as_ref()
+                    .map(rate_limit_label)
+                    .unwrap_or_else(|| "secondary".into()),
                 secondary_remaining_percent: limits
                     .secondary
                     .as_ref()
@@ -372,6 +384,25 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
         }
     }
     None
+}
+
+fn rate_limit_label(window: &RateLimitWindow) -> String {
+    match window.window_duration_mins {
+        Some(300) => "5h".into(),
+        Some(10_080) => "weekly".into(),
+        Some(mins) if mins > 0 && mins % 10_080 == 0 => {
+            let weeks = mins / 10_080;
+            if weeks == 1 {
+                "weekly".into()
+            } else {
+                format!("{weeks}w")
+            }
+        }
+        Some(mins) if mins > 0 && mins % 1_440 == 0 => format!("{}d", mins / 1_440),
+        Some(mins) if mins > 0 && mins % 60 == 0 => format!("{}h", mins / 60),
+        Some(mins) if mins > 0 => format!("{mins}m"),
+        _ => "quota".into(),
+    }
 }
 
 fn remaining_percent(used_percent: u8) -> Option<u8> {
@@ -680,6 +711,8 @@ struct RateLimitSnapshot {
 struct RateLimitWindow {
     #[serde(rename = "usedPercent")]
     used_percent: u8,
+    #[serde(rename = "windowDurationMins")]
+    window_duration_mins: Option<u64>,
     #[serde(rename = "resetsAt")]
     resets_at: Option<i64>,
 }
@@ -727,7 +760,9 @@ mod tests {
         let status = parse_account_status(output).unwrap();
 
         assert_eq!(status.plan_type.as_deref(), Some("plus"));
+        assert_eq!(status.primary_label, "5h");
         assert_eq!(status.primary_remaining_percent, Some(99));
+        assert_eq!(status.secondary_label, "weekly");
         assert_eq!(status.secondary_remaining_percent, Some(81));
         assert_eq!(
             status.primary_resets_at.map(|value| value.timestamp()),
@@ -737,6 +772,18 @@ mod tests {
             status.secondary_resets_at.map(|value| value.timestamp()),
             Some(1780484441)
         );
+    }
+
+    #[test]
+    fn parses_weekly_only_rate_limit_status() {
+        let output = r#"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":22,"windowDurationMins":10080,"resetsAt":1780484441},"planType":"plus"}}}"#;
+
+        let status = parse_account_status(output).unwrap();
+
+        assert_eq!(status.primary_label, "weekly");
+        assert_eq!(status.primary_remaining_percent, Some(78));
+        assert_eq!(status.secondary_label, "secondary");
+        assert_eq!(status.secondary_remaining_percent, None);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use crate::size;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Local};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::fs;
@@ -16,7 +16,9 @@ pub struct ProfileInfo {
     pub logged_in: bool,
     pub auth_mtime: Option<DateTime<Local>>,
     pub plan_type: Option<String>,
+    pub limit_5h_label: String,
     pub limit_5h_remaining: Option<u8>,
+    pub limit_7day_label: String,
     pub limit_7day_remaining: Option<u8>,
     pub limit_5h_resets_at: Option<DateTime<Local>>,
     pub limit_7day_resets_at: Option<DateTime<Local>>,
@@ -33,7 +35,9 @@ impl ProfileInfo {
         if status.plan_type.is_some() {
             self.plan_type = status.plan_type;
         }
+        self.limit_5h_label = status.primary_label;
         self.limit_5h_remaining = status.primary_remaining_percent;
+        self.limit_7day_label = status.secondary_label;
         self.limit_7day_remaining = status.secondary_remaining_percent;
         self.limit_5h_resets_at = status.primary_resets_at;
         self.limit_7day_resets_at = status.secondary_resets_at;
@@ -55,12 +59,7 @@ pub fn create(name: &str, copy_config: bool) -> Result<PathBuf> {
     fs::create_dir_all(path.join("sessions"))
         .with_context(|| format!("Creating {}", path.display()))?;
     if copy_config {
-        if let Some(src) = config::default_codex_config() {
-            if src.exists() {
-                fs::copy(&src, path.join("config.toml"))
-                    .with_context(|| format!("Copying {}", src.display()))?;
-            }
-        }
+        copy_default_codex_config(&path)?;
     }
     Ok(path)
 }
@@ -119,29 +118,42 @@ pub fn import_sub2_json(source: impl AsRef<Path>, name: Option<&str>) -> Result<
         .clone()
         .or_else(|| account.credentials.chatgpt_account_id.clone())
         .or_else(|| account_id_from_id_token(&account.credentials.access_token))
-        .or_else(|| account_id_from_id_token(&account.credentials.id_token));
+        .or_else(|| {
+            account
+                .credentials
+                .id_token
+                .as_deref()
+                .and_then(account_id_from_id_token)
+        });
 
     let paths = config::init()?;
     let target = paths.profiles.join(&name);
     if target.exists() {
-        anyhow::bail!("Profile already exists: {name}");
+        if target.join("auth.json").exists() {
+            anyhow::bail!("Profile already exists: {name}");
+        }
+        if !target.is_dir() {
+            anyhow::bail!(
+                "Profile path exists but is not a directory: {}",
+                target.display()
+            );
+        }
+    } else {
+        fs::create_dir_all(&target).with_context(|| format!("Creating {}", target.display()))?;
     }
     fs::create_dir_all(target.join("sessions"))
         .with_context(|| format!("Creating {}", target.display()))?;
-    if let Some(src) = config::default_codex_config() {
-        if src.exists() {
-            fs::copy(&src, target.join("config.toml"))
-                .with_context(|| format!("Copying {}", src.display()))?;
-        }
+    if !target.join("config.toml").is_file() {
+        copy_default_codex_config(&target)?;
     }
 
     let auth = json!({
         "OPENAI_API_KEY": Value::Null,
         "tokens": {
-            "id_token": account.credentials.id_token,
+            "id_token": account.credentials.id_token.unwrap_or_default(),
             "access_token": account.credentials.access_token,
-            "refresh_token": account.credentials.refresh_token,
-            "account_id": account_id,
+            "refresh_token": account.credentials.refresh_token.unwrap_or_default(),
+            "account_id": account_id.unwrap_or_default(),
         },
         "plan_expires_at": account.credentials.expires_at,
         "plan_type": account.credentials.plan_type,
@@ -256,6 +268,59 @@ fn copy_entry(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+fn copy_default_codex_config(target: &Path) -> Result<()> {
+    let Some(source) = config::default_codex_config().filter(|path| path.is_file()) else {
+        return Ok(());
+    };
+    copy_codex_config(&source, target)
+}
+
+fn copy_codex_config(source: &Path, target: &Path) -> Result<()> {
+    fs::copy(source, target.join("config.toml"))
+        .with_context(|| format!("Copying {}", source.display()))?;
+
+    let data =
+        fs::read_to_string(source).with_context(|| format!("Reading {}", source.display()))?;
+    let config: toml::Value =
+        toml::from_str(&data).with_context(|| format!("Parsing {}", source.display()))?;
+    let Some(relative) = config
+        .get("model_catalog_json")
+        .and_then(toml::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let relative = Path::new(relative);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Ok(());
+    }
+    let Some(source_dir) = source.parent() else {
+        return Ok(());
+    };
+    let source_catalog = source_dir.join(relative);
+    if !source_catalog.is_file() {
+        return Ok(());
+    }
+    let target_catalog = target.join(relative);
+    if let Some(parent) = target_catalog.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+    }
+    fs::copy(&source_catalog, &target_catalog).with_context(|| {
+        format!(
+            "Copying {} to {}",
+            source_catalog.display(),
+            target_catalog.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn copy_session_index_line(source_root: &Path, target_root: &Path, session_id: &str) -> Result<()> {
     let source = source_root.join("session_index.jsonl");
     if !source.exists() {
@@ -316,13 +381,20 @@ struct Sub2Account {
 #[derive(Debug, Deserialize)]
 struct Sub2Credentials {
     access_token: String,
-    refresh_token: String,
-    id_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
     account_id: Option<String>,
     chatgpt_account_id: Option<String>,
     email: Option<String>,
-    expires_at: Option<i64>,
+    expires_at: Option<Sub2Expiry>,
     plan_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum Sub2Expiry {
+    Unix(i64),
+    Rfc3339(String),
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -402,7 +474,9 @@ pub fn metadata(name: &str) -> Result<ProfileInfo> {
         logged_in,
         auth_mtime,
         plan_type,
+        limit_5h_label: "primary".into(),
         limit_5h_remaining: None,
+        limit_7day_label: "secondary".into(),
         limit_7day_remaining: None,
         limit_5h_resets_at: None,
         limit_7day_resets_at: None,
@@ -462,7 +536,11 @@ fn logs_size(path: &std::path::Path) -> Result<u64> {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("logs_") && name.ends_with(".sqlite") {
-                total += entry.metadata()?.len();
+                match entry.metadata() {
+                    Ok(metadata) => total += metadata.len(),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
             }
         }
     }
@@ -572,6 +650,35 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn copies_relative_model_catalog_with_codex_config() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-config-copy-test-{stamp}"));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            source.join("config.toml"),
+            "model_catalog_json = \"catalogs/models.json\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(source.join("catalogs")).unwrap();
+        fs::write(source.join("catalogs/models.json"), "{}\n").unwrap();
+
+        copy_codex_config(&source.join("config.toml"), &target).unwrap();
+
+        assert!(target.join("config.toml").is_file());
+        assert_eq!(
+            fs::read_to_string(target.join("catalogs/models.json")).unwrap(),
+            "{}\n"
+        );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn imports_sub2_json_as_isolated_codex_profile() {
         let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
@@ -630,6 +737,51 @@ mod tests {
     }
 
     #[test]
+    fn imports_sub2_json_with_rfc3339_expiry() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-sub2-rfc3339-test-{stamp}"));
+        let source = root.join("sub2.json");
+        fs::create_dir_all(&root).unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "accounts": [
+                {
+                  "name": "person@example.com",
+                  "platform": "openai",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "email": "person@example.com",
+                    "chatgpt_account_id": "account-value",
+                    "expires_at": "2026-07-16T09:32:30.000Z"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (_name, path) = import_sub2_json(&source, None).unwrap();
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert_eq!(auth["tokens"]["refresh_token"], "");
+        assert_eq!(auth["tokens"]["id_token"], "");
+        assert_eq!(auth["tokens"]["account_id"], "account-value");
+        assert_eq!(auth["plan_expires_at"], "2026-07-16T09:32:30.000Z");
+        assert_eq!(
+            plan_expires_at(&auth).map(|expiry| expiry.timestamp()),
+            Some(1_784_194_350)
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn imports_sub2_json_with_explicit_name_without_email() {
         let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
@@ -668,6 +820,49 @@ mod tests {
     }
 
     #[test]
+    fn imports_sub2_json_repairs_existing_profile_without_auth() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-sub2-repair-test-{stamp}"));
+        let source = root.join("sub2.json");
+        let profile = root.join("profiles").join("person@example.com");
+        fs::create_dir_all(profile.join("sessions")).unwrap();
+        fs::write(profile.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
+        std::env::set_var("CODEXHUB_HOME", &root);
+        fs::write(
+            &source,
+            r#"{
+              "accounts": [
+                {
+                  "name": "person@example.com",
+                  "platform": "openai",
+                  "credentials": {
+                    "access_token": "access-value",
+                    "email": "person@example.com"
+                  }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let (_name, path) = import_sub2_json(&source, None).unwrap();
+
+        let auth: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
+        assert_eq!(auth["tokens"]["access_token"], "access-value");
+        assert_eq!(
+            fs::read_to_string(path.join("config.toml")).unwrap(),
+            "approval_policy = \"never\"\n"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn imports_sub2_json_without_account_id() {
         let _guard = crate::test_support::env_lock();
         let stamp = SystemTime::now()
@@ -700,7 +895,7 @@ mod tests {
         let (_name, path) = import_sub2_json(&source, None).unwrap();
         let auth: Value =
             serde_json::from_str(&fs::read_to_string(path.join("auth.json")).unwrap()).unwrap();
-        assert!(auth["tokens"]["account_id"].is_null());
+        assert_eq!(auth["tokens"]["account_id"], "");
 
         fs::remove_dir_all(&root).ok();
     }
@@ -937,7 +1132,9 @@ mod tests {
             logged_in: true,
             auth_mtime: None,
             plan_type: None,
+            limit_5h_label: "primary".into(),
             limit_5h_remaining: None,
+            limit_7day_label: "secondary".into(),
             limit_7day_remaining: None,
             limit_5h_resets_at: None,
             limit_7day_resets_at: None,

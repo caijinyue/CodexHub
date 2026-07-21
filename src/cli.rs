@@ -314,12 +314,12 @@ fn print_proxy(proxy: &config::ProxyConfig) {
 fn print_list() -> Result<()> {
     let profiles = profile::list()?;
     println!(
-        "{:<16} {:<6} {:<8} {:>5} {:>5} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} PATH",
+        "{:<16} {:<6} {:<8} {:>12} {:>12} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} PATH",
         "NAME",
         "LOGIN",
         "PLAN",
-        "5H",
-        "7DAY",
+        "QUOTA 1",
+        "QUOTA 2",
         "MEMBER",
         "AUTH MTIME",
         "SESSIONS",
@@ -337,12 +337,12 @@ fn print_list() -> Result<()> {
             .map(|t| t.format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| "-".into());
         println!(
-            "{:<16} {:<6} {:<8} {:>5} {:>5} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} {}",
+            "{:<16} {:<6} {:<8} {:>12} {:>12} {:<10} {:<19} {:>10} {:>10} {:>10} {:<6} {}",
             p.name,
             if p.logged_in { "yes" } else { "no" },
             p.plan_type.unwrap_or_else(|| "-".into()),
-            percent(p.limit_5h_remaining),
-            percent(p.limit_7day_remaining),
+            quota(p.limit_5h_label.as_str(), p.limit_5h_remaining),
+            quota(p.limit_7day_label.as_str(), p.limit_7day_remaining),
             expires,
             auth,
             size::human(p.sessions_size),
@@ -355,9 +355,9 @@ fn print_list() -> Result<()> {
     Ok(())
 }
 
-fn percent(value: Option<u8>) -> String {
+fn quota(label: &str, value: Option<u8>) -> String {
     value
-        .map(|value| format!("{value}%"))
+        .map(|value| format!("{label} {value}%"))
         .unwrap_or_else(|| "-".into())
 }
 

@@ -13,13 +13,25 @@ pub fn path_size(path: &Path) -> Result<u64> {
     }
     let mut total = 0;
     for entry in WalkDir::new(path).follow_links(false) {
-        let entry = entry?;
-        let meta = entry.metadata()?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) if is_not_found(err.io_error()) => continue,
+            Err(err) => return Err(err.into()),
+        };
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(err) if is_not_found(err.io_error()) => continue,
+            Err(err) => return Err(err.into()),
+        };
         if meta.is_file() {
             total += meta.len();
         }
     }
     Ok(total)
+}
+
+fn is_not_found(error: Option<&std::io::Error>) -> bool {
+    error.is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 pub fn human(bytes: u64) -> String {

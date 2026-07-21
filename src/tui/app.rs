@@ -503,7 +503,9 @@ fn preserve_account_status(
             continue;
         };
         profile.plan_type = profile.plan_type.clone().or_else(|| old.plan_type.clone());
+        profile.limit_5h_label = old.limit_5h_label.clone();
         profile.limit_5h_remaining = old.limit_5h_remaining;
+        profile.limit_7day_label = old.limit_7day_label.clone();
         profile.limit_7day_remaining = old.limit_7day_remaining;
         profile.limit_5h_resets_at = old.limit_5h_resets_at;
         profile.limit_7day_resets_at = old.limit_7day_resets_at;

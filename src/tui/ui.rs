@@ -128,11 +128,7 @@ fn draw_profile_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
             } else {
                 "🔐 relogin needed"
             };
-            let quota = format!(
-                "5h {}  7d {}",
-                percent(profile.limit_5h_remaining),
-                percent(profile.limit_7day_remaining)
-            );
+            let quota = quota_summary(profile);
             let title = if active {
                 format!("▌ {}  ACTIVE", profile.name)
             } else {
@@ -259,9 +255,31 @@ fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, are
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(2),
     };
+    let mut quotas = Vec::new();
+    if profile.limit_5h_remaining.is_some() || profile.limit_5h_resets_at.is_some() {
+        quotas.push((
+            profile.limit_5h_label.as_str(),
+            profile.limit_5h_remaining,
+            profile.limit_5h_resets_at,
+        ));
+    }
+    if profile.limit_7day_remaining.is_some() || profile.limit_7day_resets_at.is_some() {
+        quotas.push((
+            profile.limit_7day_label.as_str(),
+            profile.limit_7day_remaining,
+            profile.limit_7day_resets_at,
+        ));
+    }
+    if quotas.is_empty() {
+        quotas.push((
+            profile.limit_5h_label.as_str(),
+            profile.limit_5h_remaining,
+            profile.limit_5h_resets_at,
+        ));
+    }
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .constraints(vec![Constraint::Length(3); quotas.len()])
         .split(inner);
     frame.render_widget(
         Block::default()
@@ -275,22 +293,9 @@ fn draw_quota_panel(frame: &mut Frame<'_>, app: &App, profile: &ProfileInfo, are
             .style(Style::default().bg(app.theme.panel)),
         area,
     );
-    draw_gauge(
-        frame,
-        app,
-        rows[0],
-        "5h",
-        profile.limit_5h_remaining,
-        profile.limit_5h_resets_at,
-    );
-    draw_gauge(
-        frame,
-        app,
-        rows[1],
-        "7day",
-        profile.limit_7day_remaining,
-        profile.limit_7day_resets_at,
-    );
+    for (idx, (label, remaining, resets_at)) in quotas.into_iter().enumerate() {
+        draw_gauge(frame, app, rows[idx], label, remaining, resets_at);
+    }
 }
 
 fn draw_gauge(
@@ -1061,8 +1066,14 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
             Row::new(vec![
                 Cell::from(profile.name.clone()),
                 Cell::from(marker),
-                Cell::from(percent(profile.limit_5h_remaining)),
-                Cell::from(percent(profile.limit_7day_remaining)),
+                Cell::from(quota_value(
+                    profile.limit_5h_label.as_str(),
+                    profile.limit_5h_remaining,
+                )),
+                Cell::from(quota_value(
+                    profile.limit_7day_label.as_str(),
+                    profile.limit_7day_remaining,
+                )),
                 Cell::from(expiry(profile.plan_expires_at)),
             ])
             .style(style)
@@ -1072,13 +1083,13 @@ fn draw_continue_profile_popup(frame: &mut Frame<'_>, app: &App) {
         [
             Constraint::Min(18),
             Constraint::Length(9),
-            Constraint::Length(7),
-            Constraint::Length(7),
+            Constraint::Length(12),
+            Constraint::Length(12),
             Constraint::Length(12),
         ],
     )
     .header(
-        Row::new(["Account", "State", "5h", "7day", "Member"])
+        Row::new(["Account", "State", "Quota 1", "Quota 2", "Member"])
             .style(widgets::header_style(app.theme)),
     )
     .block(widgets::block(history_target_popup_title(app), app.theme))
@@ -1249,10 +1260,23 @@ fn bool_label(value: bool) -> &'static str {
     }
 }
 
-fn percent(value: Option<u8>) -> String {
+fn quota_value(label: &str, value: Option<u8>) -> String {
     value
-        .map(|value| format!("{value}%"))
+        .map(|value| format!("{label} {value}%"))
         .unwrap_or_else(|| "-".into())
+}
+
+fn quota_summary(profile: &ProfileInfo) -> String {
+    match (profile.limit_5h_remaining, profile.limit_7day_remaining) {
+        (None, None) => "-".into(),
+        (primary, None) => quota_value(profile.limit_5h_label.as_str(), primary),
+        (None, secondary) => quota_value(profile.limit_7day_label.as_str(), secondary),
+        (primary, secondary) => format!(
+            "{}  {}",
+            quota_value(profile.limit_5h_label.as_str(), primary),
+            quota_value(profile.limit_7day_label.as_str(), secondary)
+        ),
+    }
 }
 
 fn expiry(value: Option<chrono::DateTime<chrono::Local>>) -> String {

@@ -95,7 +95,9 @@ struct ProfileResponse {
     active: bool,
     path: String,
     plan_type: Option<String>,
+    limit_5h_label: String,
     limit_5h_remaining: Option<u8>,
+    limit_7day_label: String,
     limit_7day_remaining: Option<u8>,
     plan_expires_at: Option<String>,
     used_since: Option<String>,
@@ -570,7 +572,9 @@ fn profile_response(profile: profile::ProfileInfo, active: Option<&str>) -> Prof
         logged_in: profile.logged_in,
         path: profile.path.display().to_string(),
         plan_type: profile.plan_type,
+        limit_5h_label: profile.limit_5h_label,
         limit_5h_remaining: profile.limit_5h_remaining,
+        limit_7day_label: profile.limit_7day_label,
         limit_7day_remaining: profile.limit_7day_remaining,
         plan_expires_at: date(profile.plan_expires_at),
         used_since: date(profile.used_since),
@@ -776,6 +780,18 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function quotaPart(label, value) {
+  return value == null ? '' : `${label || 'quota'} ${value}%`;
+}
+
+function quotaText(profile) {
+  const parts = [
+    quotaPart(profile.limit_5h_label, profile.limit_5h_remaining),
+    quotaPart(profile.limit_7day_label, profile.limit_7day_remaining)
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'quota -';
+}
+
 async function boot() {
   bindEvents();
   try {
@@ -839,7 +855,7 @@ async function refreshAll() {
     el.className = 'card profile' + (p.active ? ' active' : '');
     el.onclick = () => selectProfile(p.name);
     el.innerHTML = `<b>${escapeHtml(p.name)}</b> ${p.active ? '<span class="ok">active</span>' : ''}<br>
-      <span class="muted">${p.logged_in ? 'signed in' : 'relogin needed'} · 5h ${p.limit_5h_remaining ?? '-'}% · 7d ${p.limit_7day_remaining ?? '-'}%</span><br>
+      <span class="muted">${p.logged_in ? 'signed in' : 'relogin needed'} · ${quotaText(p)}</span><br>
       <span class="muted">member ${p.plan_expires_at ?? '-'} · total ${escapeHtml(p.total_size)}</span>`;
     const actions = document.createElement('p');
     const activate = document.createElement('button');
