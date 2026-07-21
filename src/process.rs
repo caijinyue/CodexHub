@@ -352,12 +352,13 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
         };
         if value.id == Some(2) {
             let limits = value.result?.rate_limits;
+            let single_window = limits.secondary.is_none();
             return Some(AccountStatus {
                 plan_type: limits.plan_type,
                 primary_label: limits
                     .primary
                     .as_ref()
-                    .map(rate_limit_label)
+                    .map(|window| rate_limit_label(window, single_window))
                     .unwrap_or_else(|| "primary".into()),
                 primary_remaining_percent: limits
                     .primary
@@ -366,7 +367,7 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
                 secondary_label: limits
                     .secondary
                     .as_ref()
-                    .map(rate_limit_label)
+                    .map(|window| rate_limit_label(window, false))
                     .unwrap_or_else(|| "secondary".into()),
                 secondary_remaining_percent: limits
                     .secondary
@@ -386,14 +387,20 @@ fn parse_account_status(text: &str) -> Option<AccountStatus> {
     None
 }
 
-fn rate_limit_label(window: &RateLimitWindow) -> String {
+fn rate_limit_label(window: &RateLimitWindow, single_window: bool) -> String {
+    if single_window {
+        return match window.window_duration_mins {
+            Some(10_080) | Some(300) | None => "7d".into(),
+            Some(_) => rate_limit_label(window, false),
+        };
+    }
     match window.window_duration_mins {
         Some(300) => "5h".into(),
-        Some(10_080) => "weekly".into(),
+        Some(10_080) => "7d".into(),
         Some(mins) if mins > 0 && mins % 10_080 == 0 => {
             let weeks = mins / 10_080;
             if weeks == 1 {
-                "weekly".into()
+                "7d".into()
             } else {
                 format!("{weeks}w")
             }
@@ -762,7 +769,7 @@ mod tests {
         assert_eq!(status.plan_type.as_deref(), Some("plus"));
         assert_eq!(status.primary_label, "5h");
         assert_eq!(status.primary_remaining_percent, Some(99));
-        assert_eq!(status.secondary_label, "weekly");
+        assert_eq!(status.secondary_label, "7d");
         assert_eq!(status.secondary_remaining_percent, Some(81));
         assert_eq!(
             status.primary_resets_at.map(|value| value.timestamp()),
@@ -775,14 +782,25 @@ mod tests {
     }
 
     #[test]
-    fn parses_weekly_only_rate_limit_status() {
+    fn parses_weekly_only_rate_limit_status_as_7d() {
         let output = r#"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":22,"windowDurationMins":10080,"resetsAt":1780484441},"planType":"plus"}}}"#;
 
         let status = parse_account_status(output).unwrap();
 
-        assert_eq!(status.primary_label, "weekly");
+        assert_eq!(status.primary_label, "7d");
         assert_eq!(status.primary_remaining_percent, Some(78));
         assert_eq!(status.secondary_label, "secondary");
+        assert_eq!(status.secondary_remaining_percent, None);
+    }
+
+    #[test]
+    fn treats_single_legacy_primary_window_as_7d() {
+        let output = r#"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1780484441},"secondary":null,"planType":"plus"}}}"#;
+
+        let status = parse_account_status(output).unwrap();
+
+        assert_eq!(status.primary_label, "7d");
+        assert_eq!(status.primary_remaining_percent, Some(88));
         assert_eq!(status.secondary_remaining_percent, None);
     }
 

@@ -85,7 +85,7 @@ codexhub
 
 [Doctor Screenshot]
 
-The account list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining quota percentages using Codex's reported quota window labels such as `weekly`, and the membership expiration date when available. Profiles are sorted from earliest membership expiration to latest membership expiration, with unknown expirations last. The right side of the main view shows the selected account details, quota, storage, and path.
+The account list loads immediately, then refreshes each logged-in profile's Codex account status in the background through the official Codex app-server API. It shows plan type, remaining quota percentages using Codex's reported quota windows such as `7d`, and the membership expiration date when available. Profiles are sorted from earliest membership expiration to latest membership expiration, with unknown expirations last. The right side of the main view shows the selected account details, quota, storage, and path.
 
 The TUI uses the terminal's light/dark preference when it can detect one. Press `t` to cycle the saved theme preference through `auto`, `light`, and `dark`. You can also force a theme for one run with `CODEXHUB_THEME=light` or `CODEXHUB_THEME=dark`.
 
