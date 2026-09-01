@@ -6,6 +6,7 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -209,22 +210,115 @@ pub fn copy_session_root_to_profile(
             source_session_path.display()
         );
     }
-    let relative = source_session_path
-        .strip_prefix(&source_root)
-        .with_context(|| {
+    let lineage = session_rollout_lineage(source_root, session_id, &source_session_path)?;
+    let target_session_path = target_root.join(
+        source_session_path
+            .strip_prefix(source_root)
+            .with_context(|| {
+                format!(
+                    "Session file {} is not under source home {}",
+                    source_session_path.display(),
+                    source_root.display()
+                )
+            })?,
+    );
+
+    // Copy ancestors first so a resumable fork is never published without the
+    // source rollouts referenced by its paginated history_base chain.
+    for (lineage_session_id, lineage_path) in lineage.iter().rev() {
+        let relative = lineage_path.strip_prefix(source_root).with_context(|| {
             format!(
                 "Session file {} is not under source home {}",
-                source_session_path.display(),
+                lineage_path.display(),
                 source_root.display()
             )
         })?;
-    let target_session_path = target_root.join(relative);
-    if let Some(parent) = target_session_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+        let target_path = target_root.join(relative);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+        }
+        crate::text_encoding::copy_as_utf8(lineage_path, &target_path)?;
+        copy_session_index_line(source_root, &target_root, lineage_session_id)?;
     }
-    crate::text_encoding::copy_as_utf8(&source_session_path, &target_session_path)?;
-    copy_session_index_line(&source_root, &target_root, session_id)?;
     Ok(target_session_path)
+}
+
+fn session_rollout_lineage(
+    source_root: &Path,
+    session_id: &str,
+    source_session_path: &Path,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut lineage = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current_id = session_id.to_string();
+    let mut current_path = source_session_path.to_path_buf();
+
+    loop {
+        if !seen.insert(current_id.clone()) {
+            anyhow::bail!(
+                "Invalid paginated history lineage for {session_id}: cycle at {current_id}"
+            );
+        }
+        let history_base = session_history_base_thread_id(&current_path)?;
+        lineage.push((current_id, current_path));
+        let Some(parent_id) = history_base else {
+            break;
+        };
+        let parent_path = find_session_rollout(source_root, &parent_id).with_context(|| {
+            format!(
+                "Invalid paginated history lineage for {session_id}: missing source rollout {parent_id}"
+            )
+        })?;
+        current_id = parent_id;
+        current_path = parent_path;
+    }
+
+    Ok(lineage)
+}
+
+fn session_history_base_thread_id(path: &Path) -> Result<Option<String>> {
+    let data = crate::text_encoding::read_to_string(path)
+        .with_context(|| format!("Reading session metadata from {}", path.display()))?;
+    let Some(line) = data.lines().next() else {
+        return Ok(None);
+    };
+    let value: Value = serde_json::from_str(line)
+        .with_context(|| format!("Parsing session metadata from {}", path.display()))?;
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return Ok(None);
+    }
+    Ok(value
+        .pointer("/payload/history_base/thread_id")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+fn find_session_rollout(source_root: &Path, session_id: &str) -> Option<PathBuf> {
+    ["sessions", "archived_sessions"]
+        .into_iter()
+        .flat_map(|directory| {
+            walkdir::WalkDir::new(source_root.join(directory))
+                .into_iter()
+                .filter_map(Result::ok)
+        })
+        .find_map(|entry| {
+            let path = entry.path();
+            if !path.is_file()
+                || !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(session_id))
+            {
+                return None;
+            }
+            let data = crate::text_encoding::read_to_string(path).ok()?;
+            let value: Value = serde_json::from_str(data.lines().next()?).ok()?;
+            let metadata_id = value
+                .pointer("/payload/session_id")
+                .or_else(|| value.pointer("/payload/id"))
+                .and_then(Value::as_str)?;
+            (metadata_id == session_id).then(|| path.to_path_buf())
+        })
 }
 
 fn copy_codex_home(source: &Path, target: &Path) -> Result<()> {
@@ -1051,6 +1145,121 @@ mod tests {
             .contains("test-session"));
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn copies_complete_paginated_session_lineage_to_target_profile() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-copy-lineage-test-{stamp}"));
+        std::env::set_var("CODEXHUB_HOME", &root);
+        let source = create("source", false).unwrap();
+        let target = create("target", false).unwrap();
+        let grandparent = source.join("sessions/2026/08/17/rollout-grandparent-session.jsonl");
+        let parent = source.join("sessions/2026/08/18/rollout-parent-session.jsonl");
+        let child = source.join("sessions/2026/08/19/rollout-child-session.jsonl");
+        for path in [&grandparent, &parent, &child] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        fs::write(
+            &grandparent,
+            paginated_session_meta("grandparent-session", None),
+        )
+        .unwrap();
+        fs::write(
+            &parent,
+            paginated_session_meta("parent-session", Some("grandparent-session")),
+        )
+        .unwrap();
+        fs::write(
+            &child,
+            paginated_session_meta("child-session", Some("parent-session")),
+        )
+        .unwrap();
+        fs::write(
+            source.join("session_index.jsonl"),
+            concat!(
+                "{\"id\":\"grandparent-session\",\"thread_name\":\"Grandparent\"}\n",
+                "{\"id\":\"parent-session\",\"thread_name\":\"Parent\"}\n",
+                "{\"id\":\"child-session\",\"thread_name\":\"Child\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let copied =
+            copy_session_to_profile("source", "target", "child-session", child.to_str().unwrap())
+                .unwrap();
+
+        assert_eq!(copied, target.join(child.strip_prefix(&source).unwrap()));
+        for source_path in [&grandparent, &parent, &child] {
+            let target_path = target.join(source_path.strip_prefix(&source).unwrap());
+            assert_eq!(
+                fs::read_to_string(target_path).unwrap(),
+                fs::read_to_string(source_path).unwrap()
+            );
+        }
+        let target_index = fs::read_to_string(target.join("session_index.jsonl")).unwrap();
+        for session_id in ["grandparent-session", "parent-session", "child-session"] {
+            assert!(target_index.contains(session_id));
+        }
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rejects_missing_paginated_parent_before_copying_child() {
+        let _guard = crate::test_support::env_lock();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexhub-missing-lineage-test-{stamp}"));
+        std::env::set_var("CODEXHUB_HOME", &root);
+        let source = create("source", false).unwrap();
+        let target = create("target", false).unwrap();
+        let child = source.join("sessions/2026/08/19/rollout-child-session.jsonl");
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        fs::write(
+            &child,
+            paginated_session_meta("child-session", Some("missing-parent-session")),
+        )
+        .unwrap();
+
+        let error =
+            copy_session_to_profile("source", "target", "child-session", child.to_str().unwrap())
+                .unwrap_err();
+
+        assert!(error.to_string().contains("missing-parent-session"));
+        assert!(!target.join(child.strip_prefix(&source).unwrap()).exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn paginated_session_meta(session_id: &str, history_base: Option<&str>) -> String {
+        let history_base = history_base.map(|thread_id| {
+            json!({
+                "thread_id": thread_id,
+                "end_ordinal_exclusive": 42,
+                "end_byte_offset": 1024
+            })
+        });
+        format!(
+            "{}\n",
+            json!({
+                "timestamp": "2026-08-19T06:05:20.559Z",
+                "ordinal": 42,
+                "type": "session_meta",
+                "payload": {
+                    "id": session_id,
+                    "session_id": session_id,
+                    "history_mode": "paginated",
+                    "history_base": history_base
+                }
+            })
+        )
     }
 
     #[test]

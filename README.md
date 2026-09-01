@@ -95,7 +95,7 @@ CodexHub checks the current Git upstream for updates in the background when the 
 
 Press `h` from the account list to show resume sessions across all profiles and the default `~/.codex` home. The history screen loads in the background and supports scrolling through the merged session list. By default, it shows sessions whose CWD matches the directory where CodexHub was started; press `a` to toggle between current-path sessions and all paths. CodexHub reads the same persisted history used by Codex resume through the official app-server `thread/list` API. The right side previews the selected session. Press `Enter` on a row to run `codex resume` with that session's original `CODEX_HOME`. Press `q` from history or doctor to return to the main account list; press `q` again from the main view to quit.
 
-If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, choose the target profile from the popup list, and press `Enter`. CodexHub copies the selected session file and session index entry into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile.
+If one profile runs out of quota while working on a session, open the history screen, select that session, press `c`, choose the target profile from the popup list, and press `Enter`. CodexHub copies the selected session and its complete paginated `history_base` rollout lineage, together with any available session index entries, into the target profile's isolated `CODEX_HOME`, then runs `codex resume` from that target profile. This preserves the source history required to resume sessions created by `fork`.
 
 ## Shared Cache
 
